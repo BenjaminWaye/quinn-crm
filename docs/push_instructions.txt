@@ -1,0 +1,20 @@
+Create repo on GitHub (do NOT push credentials).
+
+Suggested steps:
+1. git init
+2. git checkout -b quinn/crm-finish
+3. git add .
+4. git commit -m "scaffold: initial quinn-crm scaffold"
+5. Create remote: git remote add origin git@github.com:BenjaminWaye/quinn-crm.git
+6. git push -u origin quinn/crm-finish
+7. Open PR to merge quinn/crm-finish -> main, verify CI, then merge
+
+CI secrets mapping (GitHub repository secrets):
+- FIREBASE_TOKEN: CI deploy token (CI only)
+- FIREBASE_PROJECT_ID: quinn-dash
+- GOOGLE_APPLICATION_CREDENTIALS: (for manual deploys if needed)
+- ALGOLIA_APP_ID, ALGOLIA_API_KEY
+
+To deploy locally with emulator:
+- Install firebase-tools and run firebase emulators:start --only firestore,functions
+- Run npm run seed from functions/ to populate test data
