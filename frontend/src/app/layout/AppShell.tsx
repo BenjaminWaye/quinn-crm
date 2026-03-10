@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-do
 import { Menu, PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
 import { useProducts } from "../providers";
 import { useSession } from "../../lib/session";
+import { createProduct } from "../../lib/data";
 
 function useProductFromPath(pathname: string): string | null {
   const match = pathname.match(/^\/products\/([^/]+)/);
@@ -12,7 +13,7 @@ function useProductFromPath(pathname: string): string | null {
 export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { products, loading } = useProducts();
+  const { products, loading, refresh } = useProducts();
   const { user, logout } = useSession();
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -20,6 +21,13 @@ export function AppShell() {
   const [desktopNavHidden, setDesktopNavHidden] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [preferredProductId, setPreferredProductId] = useState<string | null>(null);
+  const [showAddProductPopover, setShowAddProductPopover] = useState(false);
+  const [newProductName, setNewProductName] = useState("");
+  const [newProductRepo, setNewProductRepo] = useState("");
+  const [newProductDescription, setNewProductDescription] = useState("");
+  const [newProductMission, setNewProductMission] = useState("");
+  const [creatingProduct, setCreatingProduct] = useState(false);
+  const [createProductError, setCreateProductError] = useState("");
   const initialPathRef = useRef<string>(location.pathname);
   const hasHandledInitialRedirectRef = useRef(false);
 
@@ -40,6 +48,7 @@ export function AppShell() {
   const isMemoryView = /^\/memory(\/|$)/.test(location.pathname);
   const isDocsView = /^\/docs(\/|$)|^\/products\/[^/]+\/docs(\/|$)/.test(location.pathname);
   const isTeamView = /^\/team(\/|$)|^\/products\/[^/]+\/team(\/|$)/.test(location.pathname);
+  const isSettingsView = location.pathname.startsWith("/settings");
   const isProductsPage = location.pathname === "/products";
   const globalViewTitle = isMemoryView
     ? "Company Memory"
@@ -50,7 +59,7 @@ export function AppShell() {
         : isCalendarView
           ? "OpenClaw Calendar"
           : null;
-  const isWorkspaceView = isProductView || isCalendarView || isMemoryView || isDocsView || isTeamView || isProductsPage;
+  const isWorkspaceView = isProductView || isCalendarView || isMemoryView || isDocsView || isTeamView || isSettingsView || isProductsPage;
   const productTabs = activeProductId
     ? [
         { label: "Overview", to: `/products/${activeProductId}`, active: location.pathname === `/products/${activeProductId}` },
@@ -138,6 +147,32 @@ export function AppShell() {
       navigate(`/products/${currentProduct.id}`, { replace: true });
     }
   }, [currentProduct, loading, navigate]);
+
+  const onCreateProduct = async () => {
+    if (!newProductName.trim() || creatingProduct) return;
+    try {
+      setCreatingProduct(true);
+      setCreateProductError("");
+      const result = await createProduct({
+        name: newProductName.trim(),
+        repo: newProductRepo.trim(),
+        description: newProductDescription.trim(),
+        mission: newProductMission.trim(),
+      });
+      const nextId = result.data.productId;
+      setNewProductName("");
+      setNewProductRepo("");
+      setNewProductDescription("");
+      setNewProductMission("");
+      setShowAddProductPopover(false);
+      await refresh();
+      navigate(`/products/${nextId}`);
+    } catch (error) {
+      setCreateProductError((error as Error)?.message || "Failed to create product");
+    } finally {
+      setCreatingProduct(false);
+    }
+  };
 
   return (
     <div className="mc-theme h-screen flex flex-col overflow-hidden bg-[#090b10] text-neutral-100">
@@ -232,14 +267,54 @@ export function AppShell() {
                   ))}
                   {!loading && products.length === 0 && <div className="p-3 text-sm text-neutral-500">No products yet.</div>}
                 </nav>
-                <div className="p-3 border-t border-[#1b1f2a]">
-                  <Link
-                    to="/products"
-                    onClick={() => setDesktopProductSwitcherOpen(false)}
-                    className="block text-sm text-neutral-400 hover:text-white hover:bg-[#121722] rounded-md px-2 py-2"
+                <div className="p-3 border-t border-[#1b1f2a] space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreateProductError("");
+                      setShowAddProductPopover((current) => !current);
+                    }}
+                    className="w-full text-left text-sm text-neutral-300 hover:text-white hover:bg-[#121722] rounded-md px-2 py-2"
                   >
-                    All products
-                  </Link>
+                    + Add new product
+                  </button>
+                  {showAddProductPopover && (
+                    <div className="rounded-md border border-[#2a3345] bg-[#0b1017] p-2 space-y-2">
+                      <input
+                        className="w-full border border-[#2a3345] rounded px-2 py-1.5 text-sm bg-[#0d1118]"
+                        placeholder="Name"
+                        value={newProductName}
+                        onChange={(event) => setNewProductName(event.target.value)}
+                      />
+                      <input
+                        className="w-full border border-[#2a3345] rounded px-2 py-1.5 text-sm bg-[#0d1118]"
+                        placeholder="Repo URL (optional)"
+                        value={newProductRepo}
+                        onChange={(event) => setNewProductRepo(event.target.value)}
+                      />
+                      <textarea
+                        className="w-full border border-[#2a3345] rounded px-2 py-1.5 text-sm min-h-[64px] bg-[#0d1118]"
+                        placeholder="Description (optional)"
+                        value={newProductDescription}
+                        onChange={(event) => setNewProductDescription(event.target.value)}
+                      />
+                      <textarea
+                        className="w-full border border-[#2a3345] rounded px-2 py-1.5 text-sm min-h-[64px] bg-[#0d1118]"
+                        placeholder="Mission (optional)"
+                        value={newProductMission}
+                        onChange={(event) => setNewProductMission(event.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void onCreateProduct()}
+                        disabled={creatingProduct || !newProductName.trim()}
+                        className="w-full rounded bg-[#4f46e5] hover:bg-[#4338ca] disabled:opacity-60 text-white text-sm px-3 py-2"
+                      >
+                        {creatingProduct ? "Creating..." : "Create product"}
+                      </button>
+                      {createProductError && <p className="text-xs text-red-400">{createProductError}</p>}
+                    </div>
+                  )}
                 </div>
               </aside>
             )}

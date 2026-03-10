@@ -16,6 +16,9 @@ export type ProductRecord = {
   id: string;
   name: string;
   status: string;
+  repo?: string;
+  description?: string;
+  mission?: string;
   order?: number;
   ownerId?: string;
 };
@@ -605,6 +608,13 @@ export async function listProducts(): Promise<ProductRecord[]> {
   return readCollection<ProductRecord>("products", [orderBy("order", "asc")]);
 }
 
+export async function getProduct(productId: string): Promise<ProductRecord | null> {
+  if (SKIP_AUTH) {
+    return (loadMockDb().products ?? []).find((product) => product.id === productId) ?? null;
+  }
+  return readDocument<ProductRecord>(`products/${productId}`);
+}
+
 export async function listTasks(productId: string): Promise<TaskRecord[]> {
   if (SKIP_AUTH) {
     return [...(loadMockDb().tasksByProduct[productId] ?? [])].map((task) => ({
@@ -728,14 +738,30 @@ export async function listTopPriorities(productId: string): Promise<TaskRecord[]
   return tasks.filter((task) => task.status !== "done").sort((a, b) => (score[a.priority] ?? 99) - (score[b.priority] ?? 99)).slice(0, 5);
 }
 
-export async function createProduct(input: { name: string; slug?: string; description?: string; color?: string; icon?: string }) {
+export async function createProduct(input: {
+  name: string;
+  slug?: string;
+  repo?: string;
+  description?: string;
+  mission?: string;
+  color?: string;
+  icon?: string;
+}) {
   if (SKIP_AUTH) {
     const dbState = loadMockDb();
     const id = (input.slug ?? input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")).replace(/^-+|-+$/g, "");
     if (dbState.products.some((product) => product.id === id)) {
       throw new Error("Product already exists");
     }
-    dbState.products.push({ id, name: input.name, status: "active", order: dbState.products.length });
+    dbState.products.push({
+      id,
+      name: input.name,
+      status: "active",
+      repo: input.repo?.trim() || "",
+      description: input.description?.trim() || "",
+      mission: input.mission?.trim() || "",
+      order: dbState.products.length,
+    });
     dbState.contactsByProduct[id] = [];
     dbState.tasksByProduct[id] = [];
     dbState.kpisByProduct[id] = [];

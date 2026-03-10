@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { listActivity, listBlockedTasks, listKeyContacts, listKpiEntries, listKpis, listTopPriorities, type ActivityRecord, type ContactRecord, type KpiRecord, type TaskRecord } from "../lib/data";
+import { getProduct, listActivity, listBlockedTasks, listKeyContacts, listKpiEntries, listKpis, listTopPriorities, type ActivityRecord, type ContactRecord, type KpiRecord, type ProductRecord, type TaskRecord } from "../lib/data";
 import { calculateKpiSnapshot } from "../features/kpi/kpi.calculations";
 import { formatDateTime } from "../lib/time";
 
 export function ProductOverviewPage() {
   const { productId = "" } = useParams();
+  const [product, setProduct] = useState<ProductRecord | null>(null);
   const [kpis, setKpis] = useState<KpiRecord[]>([]);
   const [snapshots, setSnapshots] = useState<Record<string, ReturnType<typeof calculateKpiSnapshot>>>({});
   const [top, setTop] = useState<TaskRecord[]>([]);
@@ -21,7 +22,8 @@ export function ProductOverviewPage() {
       try {
         setLoading(true);
         setError("");
-        const [nextKpis, nextTop, nextContacts, nextActivity, nextBlockers] = await Promise.all([
+        const [nextProduct, nextKpis, nextTop, nextContacts, nextActivity, nextBlockers] = await Promise.all([
+          getProduct(productId),
           listKpis(productId),
           listTopPriorities(productId),
           listKeyContacts(productId),
@@ -32,6 +34,7 @@ export function ProductOverviewPage() {
         for (const kpi of nextKpis.slice(0, 6)) {
           map[kpi.key] = calculateKpiSnapshot(kpi, await listKpiEntries(productId, kpi.key));
         }
+        setProduct(nextProduct);
         setKpis(nextKpis.slice(0, 6));
         setSnapshots(map);
         setTop(nextTop.slice(0, 5));
@@ -50,6 +53,23 @@ export function ProductOverviewPage() {
   return (
     <div className="p-4 lg:p-8 pb-20 lg:pb-8 max-w-7xl mx-auto space-y-6">
       {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm">{error}</div>}
+      <section className="bg-white border border-neutral-200 rounded-lg p-4 space-y-2">
+        <h1 className="text-2xl font-bold">{product?.name ?? "Product overview"}</h1>
+        <p className="text-sm text-neutral-700">{product?.description?.trim() || "No description yet."}</p>
+        <p className="text-sm text-neutral-700">
+          <span className="font-medium">Mission:</span> {product?.mission?.trim() || "No mission set."}
+        </p>
+        <p className="text-sm text-neutral-700">
+          <span className="font-medium">Repo:</span>{" "}
+          {product?.repo?.trim() ? (
+            <a className="text-blue-600 hover:underline break-all" href={product.repo} target="_blank" rel="noreferrer">
+              {product.repo}
+            </a>
+          ) : (
+            "No repo linked."
+          )}
+        </p>
+      </section>
       {blockers.length > 0 && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
           <h3 className="font-semibold text-red-800 mb-2">Blocked tasks</h3>
