@@ -6,8 +6,14 @@ admin.initializeApp();
 
 const db = admin.firestore();
 const eu = functions.region("europe-west1");
-const OWNER_UID = process.env.OWNER_UID ?? "";
-const OPENCLOW_SECRET = process.env.OPENCLOW_SECRET ?? process.env.OPENCLOW_KEY ?? "";
+const runtimeConfig = functions.config();
+const OWNER_UID = process.env.OWNER_UID ?? runtimeConfig?.app?.owner_uid ?? "";
+const OPENCLOW_SECRET =
+  process.env.OPENCLOW_SECRET ??
+  process.env.OPENCLOW_KEY ??
+  runtimeConfig?.openclaw?.secret ??
+  runtimeConfig?.openclow?.secret ??
+  "";
 
 type ActivityType =
   | "product.updated"
@@ -59,10 +65,11 @@ function requireOwner(context: functions.https.CallableContext): string {
     throw new functions.https.HttpsError("unauthenticated", "Sign-in required");
   }
 
-  // Temporary fallback: if OWNER_UID is not configured in runtime env,
-  // allow the currently signed-in user instead of hard failing.
   if (!OWNER_UID) {
-    return context.auth.uid;
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "OWNER_UID is not configured on the server",
+    );
   }
 
   if (context.auth.uid !== OWNER_UID) {

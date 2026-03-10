@@ -38,7 +38,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [skipAuth]);
 
   const value = useMemo<SessionState>(() => {
-    const isOwner = skipAuth || Boolean(user && (!OWNER_UID || user.uid === OWNER_UID));
+    const isOwner = skipAuth || Boolean(user && OWNER_UID && user.uid === OWNER_UID);
     return {
       loading,
       user,

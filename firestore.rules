@@ -7,9 +7,7 @@ service cloud.firestore {
     }
 
     function isOwner() {
-      // Temporary dev mode: allow any signed-in user.
-      // Replace with strict OWNER_UID check before production hardening.
-      return isSignedIn();
+      return isSignedIn() && request.auth.uid == "kPpvp7Q9M7WVUHvrsBTE3HzCAjD2";
     }
 
     match /users/{userId} {
