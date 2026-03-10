@@ -1,0 +1,59 @@
+Product OS Dashboard Implementation Plan (CRM + Tasks + KPI)
+
+This repository follows a product-centric architecture:
+- Every core entity is scoped by productId.
+- Product is the top-level workspace for CRM, Tasks, KPI, Activity and Settings.
+- Mobile-first UX is primary, with desktop enhancements.
+
+Implemented design rules:
+1) Product-first data model.
+2) Owner-only access.
+3) Firebase-native stack (Firestore/Auth/Functions/Hosting).
+4) OpenClaw endpoints via secure HTTP functions only.
+5) Shared TypeScript contracts and central Firestore path helpers.
+
+Core collections:
+- users/{userId}
+- products/{productId}
+- products/{productId}/contacts/{contactId}
+- products/{productId}/tasks/{taskId}
+- products/{productId}/tasks/{taskId}/comments/{commentId}
+- products/{productId}/kpis/{kpiKey}
+- products/{productId}/kpis/{kpiKey}/entries/{entryId}
+- products/{productId}/activity/{activityId}
+- products/{productId}/settings/config
+- agent_runs/{runId}
+
+Frontend navigation behavior:
+- Sidebar is used to switch products on desktop and mobile.
+- Desktop: sidebar can be hidden and shown with explicit controls.
+- Mobile: sidebar is a temporary popup overlay shown only when switching product.
+- Mobile section navigation uses bottom navigation.
+
+OpenClaw endpoints:
+- /api/openclaw/listProducts
+- /api/openclaw/getProductOverview
+- /api/openclaw/listTasks
+- /api/openclaw/createTask
+- /api/openclaw/updateTask
+- /api/openclaw/addTaskComment
+- /api/openclaw/listContacts
+- /api/openclaw/addKpiEntry
+- /api/openclaw/addActivityNote
+
+Callable functions:
+- createProduct
+- updateProduct
+- createContact
+- updateContact
+- createTask
+- updateTask
+- addTaskComment
+- createKpi
+- addKpiEntry
+
+Notes:
+- Firestore rules enforce owner-only reads/writes.
+- Functions validate owner auth and OpenClaw secret.
+- Activity events are written through a shared helper.
+- This is the MVP foundation and is intentionally structured for future OpenClaw agent workflows.
