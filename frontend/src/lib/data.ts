@@ -774,6 +774,36 @@ export async function createProduct(input: {
   return call(input);
 }
 
+export async function updateProduct(input: {
+  productId: string;
+  patch: Partial<{
+    name: string;
+    status: string;
+    repo: string;
+    description: string;
+    mission: string;
+    color: string;
+    icon: string;
+  }>;
+}) {
+  if (SKIP_AUTH) {
+    const dbState = loadMockDb();
+    dbState.products = dbState.products.map((product) =>
+      product.id === input.productId
+        ? {
+            ...product,
+            ...input.patch,
+          }
+        : product,
+    );
+    saveMockDb(dbState);
+    return { data: { ok: true } };
+  }
+
+  const call = httpsCallable<typeof input, { ok: boolean }>(ensureFunctions(), "updateProduct");
+  return call(input);
+}
+
 export async function createContact(input: {
   productId: string;
   kind: string;
