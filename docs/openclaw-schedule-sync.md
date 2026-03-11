@@ -6,16 +6,16 @@ This calendar is designed to mirror OpenClaw local schedules exactly.
 
 - Source of truth: OpenClaw local scheduler state.
 - Quinn CRM stores a mirrored snapshot in Firestore collection:
-  - `openclaw_schedules/{jobId}`
-- Sync metadata is written to:
-  - `system/openclaw_schedule_sync`
+  - `openclaw_schedules/{agentId}__{jobId}`
+- Sync metadata is written per agent to:
+  - `system/openclaw_schedule_sync_{agentId}`
 
 ## Sync endpoint
 
 - URL: `POST /api/openclaw/syncSchedules`
 - Full URL (prod): `https://europe-west1-quinn-dash.cloudfunctions.net/api/openclaw/syncSchedules`
 - Auth header:
-  - `x-openclaw-key: <OPENCLOW_SECRET>`
+  - `x-openclaw-key: <OPENCLAW_SECRET>`
 
 ## Payload
 

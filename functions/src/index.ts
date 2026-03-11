@@ -1304,13 +1304,14 @@ openclaw.post("/api/openclaw/syncSchedules", async (req, res) => {
 
     const schedulesCol = db.collection("openclaw_schedules");
     const existingSnap = await schedulesCol.where("agentId", "==", agentId).get();
-    const incomingIds = new Set<string>();
+    const incomingDocIds = new Set<string>();
     const batch = db.batch();
 
     for (const rawJob of jobs) {
       const jobId = requireString(rawJob?.id, "job.id", 2, 120);
       const name = requireString(rawJob?.name, "job.name", 2, 160);
-      incomingIds.add(jobId);
+      const docId = `${agentId}__${jobId}`;
+      incomingDocIds.add(docId);
 
       const weekSlots = Array.isArray(rawJob?.weekSlots)
         ? rawJob.weekSlots
@@ -1330,9 +1331,10 @@ openclaw.post("/api/openclaw/syncSchedules", async (req, res) => {
         : [];
 
       batch.set(
-        schedulesCol.doc(jobId),
+        schedulesCol.doc(docId),
         {
           id: jobId,
+          docId,
           name,
           agentId,
           enabled: rawJob?.enabled !== false,
@@ -1354,13 +1356,13 @@ openclaw.post("/api/openclaw/syncSchedules", async (req, res) => {
     }
 
     for (const docSnap of existingSnap.docs) {
-      if (!incomingIds.has(docSnap.id)) {
+      if (!incomingDocIds.has(docSnap.id)) {
         batch.delete(docSnap.ref);
       }
     }
 
     batch.set(
-      db.doc("system/openclaw_schedule_sync"),
+      db.doc(`system/openclaw_schedule_sync_${agentId}`),
       {
         agentId,
         timezone,

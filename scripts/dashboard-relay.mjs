@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, statSync, readdirSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { resolve, basename, extname } from 'node:path';
 
 /**
@@ -42,6 +43,7 @@ const UPDATE_TASK_URL = env.UPDATE_TASK_URL || `${API_BASE_URL}/openclaw/updateT
 const ADD_TASK_COMMENT_URL = env.ADD_TASK_COMMENT_URL || `${API_BASE_URL}/openclaw/addTaskComment`;
 const ADD_ACTIVITY_NOTE_URL = env.ADD_ACTIVITY_NOTE_URL || `${API_BASE_URL}/openclaw/addActivityNote`;
 const LIST_TASK_COMMENTS_URL = env.LIST_TASK_COMMENTS_URL || `${API_BASE_URL}/openclaw/listTaskComments`;
+const SYNC_SCHEDULES_URL = env.SYNC_SCHEDULES_URL || `${API_BASE_URL}/openclaw/syncSchedules`;
 const DEFAULT_AGENT_ID = env.DEFAULT_AGENT_ID || 'quinn-main';
 
 function parseArgs(argv) {
@@ -535,12 +537,58 @@ async function cmdSyncMemory(args) {
   console.log(JSON.stringify({ ok: true, action: 'sync-memory', longTerm: !!longTerm, entries: entries.length, response: data }, null, 2));
 }
 
+async function cmdSyncSchedules(args) {
+  const agentId = args.agentId || DEFAULT_AGENT_ID;
+  const timezone = args.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+  // Pull local cron jobs from OpenClaw CLI
+  const raw = execSync('openclaw cron list --all --json', { encoding: 'utf8' });
+  const parsed = JSON.parse(raw);
+  const jobsRaw = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.jobs) ? parsed.jobs : Array.isArray(parsed?.data) ? parsed.data : [];
+
+  const jobs = jobsRaw.map((j) => {
+    const schedule = j?.schedule || {};
+    const scheduleType = schedule?.kind || 'other';
+    const expression = scheduleType === 'cron'
+      ? String(schedule?.expr || '')
+      : scheduleType === 'every'
+        ? `every:${Number(schedule?.everyMs || 0)}ms`
+        : scheduleType === 'at'
+          ? `at:${String(schedule?.at || '')}`
+          : '';
+
+    return {
+      id: String(j?.id || j?.jobId || ''),
+      name: String(j?.name || j?.id || j?.jobId || 'Unnamed schedule'),
+      enabled: j?.enabled !== false,
+      alwaysRunning: false,
+      color: '',
+      productId: null,
+      scheduleType,
+      expression,
+      tags: [],
+      weekSlots: [],
+      nextRuns: j?.state?.nextRunAtMs ? [new Date(Number(j.state.nextRunAtMs)).toISOString()] : [],
+      sourceUpdatedAt: new Date(Number(j?.updatedAtMs || Date.now())).toISOString(),
+    };
+  }).filter((j) => j.id);
+
+  const data = await postJson(SYNC_SCHEDULES_URL, {
+    agentId,
+    timezone,
+    generatedAt: nowIso(),
+    jobs,
+  });
+
+  console.log(JSON.stringify({ ok: true, action: 'sync-schedules', sent: jobs.length, response: data }, null, 2));
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0];
 
   if (!cmd || ['help', '-h', '--help'].includes(cmd)) {
-    console.log('Usage: poll | poll-and-work | create | update | comment | list-contacts | sync-docs | sync-workspace-docs | sync-memory (see file header for examples)');
+    console.log('Usage: poll | poll-and-work | create | update | comment | list-contacts | sync-docs | sync-workspace-docs | sync-memory | sync-schedules (see file header for examples)');
     return;
   }
 
@@ -553,6 +601,7 @@ async function main() {
   if (cmd === 'sync-docs') return cmdSyncDocs(args);
   if (cmd === 'sync-workspace-docs') return cmdSyncWorkspaceDocs(args);
   if (cmd === 'sync-memory') return cmdSyncMemory(args);
+  if (cmd === 'sync-schedules') return cmdSyncSchedules(args);
 
   throw new Error(`Unknown command: ${cmd}`);
 }
