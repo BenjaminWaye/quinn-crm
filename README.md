@@ -85,6 +85,8 @@ All are `POST` and require header `x-openclaw-key: <OPENCLOW_SECRET>`.
 - `/api/openclaw/listContacts`
 - `/api/openclaw/addKpiEntry`
 - `/api/openclaw/addActivityNote`
+- `/api/openclaw/syncMemory`
+- `/api/openclaw/syncDocs`
 
 ## Response Envelope
 ```ts
