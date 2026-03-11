@@ -198,7 +198,7 @@ async function cmdPollAndWork(args) {
         const hasOpenChecklist = Array.isArray(t.checklist) && t.checklist.some((c) => !c.done);
         if (!isAgent) continue;
 
-        // Auto-pickup: move agent backlog/todo tasks into in_progress so work can start.
+        // Auto-pickup: move agent backlog/todo tasks into in_progress and immediately mark execution started.
         if ((t.status === 'backlog' || t.status === 'todo')) {
           await postJson(UPDATE_TASK_URL, {
             productId,
@@ -211,7 +211,7 @@ async function cmdPollAndWork(args) {
             productId,
             agentId: DEFAULT_AGENT_ID,
             taskId: t.id,
-            body: 'Auto-picked by heartbeat worker: moved to in_progress and queued for execution.',
+            body: 'Auto-picked by heartbeat worker: moved to in_progress. Execution started now; next update will include concrete output artifacts.',
           });
           continue;
         }
@@ -261,6 +261,7 @@ async function cmdPollAndWork(args) {
         const hasDescriptionSupplement = description.includes('\n') && description.split('\n').length > 1;
 
         const hasProvidedAnswers = hasHumanAfterTemplate || hasDescriptionSupplement;
+        const executionStartedAlready = allCommentText.includes('execution started now') || allCommentText.includes('auto-picked by heartbeat worker: moved to in_progress. execution started');
 
         // If answers are present and task is blocked, move back to in_progress and keep it with agent flow.
         if (hasProvidedAnswers && t.status === 'blocked') {
@@ -271,6 +272,16 @@ async function cmdPollAndWork(args) {
             patch: {
               status: 'in_progress',
             },
+          });
+        }
+
+        // Ensure in_progress tasks have an explicit execution-start signal once.
+        if (t.status === 'in_progress' && !executionStartedAlready) {
+          await postJson(ADD_TASK_COMMENT_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            body: 'Execution started now. This task is actively being processed by the heartbeat worker; next update will include concrete output artifacts.',
           });
           continue;
         }
