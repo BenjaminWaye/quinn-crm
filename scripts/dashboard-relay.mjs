@@ -216,7 +216,23 @@ async function cmdPollAndWork(args) {
           continue;
         }
 
-        if (!hasOpenChecklist) continue;
+        if (!hasOpenChecklist) {
+          if (t.status === 'in_progress') {
+            await postJson(UPDATE_TASK_URL, {
+              productId,
+              agentId: DEFAULT_AGENT_ID,
+              taskId: t.id,
+              patch: { status: 'review' },
+            });
+            await postJson(ADD_TASK_COMMENT_URL, {
+              productId,
+              agentId: DEFAULT_AGENT_ID,
+              taskId: t.id,
+              body: 'Auto-advanced to review: task has no open checklist items and is ready for validation/approval.',
+            });
+          }
+          continue;
+        }
 
         const description = String(t.description || '').toLowerCase();
         const latest = String(t.latestCommentPreview || '').toLowerCase();
@@ -282,6 +298,22 @@ async function cmdPollAndWork(args) {
             agentId: DEFAULT_AGENT_ID,
             taskId: t.id,
             body: 'Execution started now. This task is actively being processed by the heartbeat worker; next update will include concrete output artifacts.',
+          });
+        }
+
+        // If required inputs are present, auto-advance to review (prevents in_progress stalling).
+        if (t.status === 'in_progress' && hasProvidedAnswers) {
+          await postJson(UPDATE_TASK_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            patch: { status: 'review' },
+          });
+          await postJson(ADD_TASK_COMMENT_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            body: 'Auto-advanced to review: required inputs are present. Ready for validation or finalization.',
           });
           continue;
         }
