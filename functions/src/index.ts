@@ -1194,6 +1194,33 @@ openclaw.post("/api/openclaw/addTaskComment", async (req, res) => {
   }
 });
 
+openclaw.post("/api/openclaw/listTaskComments", async (req, res) => {
+  let run: FirebaseFirestore.DocumentReference | null = null;
+  try {
+    const productId = requireString(req.body?.productId, "productId", 2, 120);
+    const taskId = requireString(req.body?.taskId, "taskId", 2, 120);
+    const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+    const take = Math.min(Number(req.body?.limit ?? 20), 100);
+
+    run = await startAgentRun({ productId, agentId, action: "task.comments.list" });
+
+    const snap = await db
+      .collection(paths.taskComments(productId, taskId))
+      .orderBy("createdAt", "desc")
+      .limit(take)
+      .get();
+
+    const items = snap.docs.map((d) => d.data());
+    await finishAgentRun(run, { status: "success", outputSummary: `count:${items.length}` });
+    res.json({ ok: true, data: { items } });
+  } catch (error) {
+    if (run) {
+      await finishAgentRun(run, { status: "failed", errorMessage: (error as Error).message });
+    }
+    res.status(400).json({ ok: false, error: (error as Error).message });
+  }
+});
+
 openclaw.post("/api/openclaw/listContacts", async (req, res) => {
   const productId = String(req.body?.productId ?? "").trim();
   const agentId = String(req.body?.agentId ?? "openclaw").trim();
