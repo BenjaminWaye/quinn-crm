@@ -1038,6 +1038,74 @@ openclaw.post("/api/openclaw/listTasks", async (req, res) => {
   }
 });
 
+openclaw.post("/api/openclaw/getTask", async (req, res) => {
+  const taskId = String(req.body?.taskId ?? "").trim();
+  const requestedProductId = String(req.body?.productId ?? "").trim();
+  const agentId = String(req.body?.agentId ?? "openclaw").trim();
+  const includeComments = Boolean(req.body?.includeComments);
+  const commentLimit = Math.min(Number(req.body?.commentLimit ?? 20), 100);
+
+  if (!taskId) {
+    res.status(400).json({ ok: false, error: "taskId is required" });
+    return;
+  }
+
+  const run = await startAgentRun({
+    productId: requestedProductId || "global",
+    agentId,
+    action: "getTask",
+  });
+
+  try {
+    let resolvedProductId = requestedProductId ? await resolveProductId(requestedProductId) : "";
+    let taskData: FirebaseFirestore.DocumentData | null = null;
+
+    if (resolvedProductId) {
+      const taskSnap = await db.doc(paths.task(resolvedProductId, taskId)).get();
+      if (taskSnap.exists) {
+        taskData = taskSnap.data() ?? null;
+      }
+    } else {
+      const snap = await db.collectionGroup("tasks").where("id", "==", taskId).limit(1).get();
+      if (!snap.empty) {
+        const taskDoc = snap.docs[0];
+        taskData = taskDoc.data();
+        resolvedProductId = String(taskData.productId ?? "").trim();
+      }
+    }
+
+    if (!taskData || !resolvedProductId) {
+      await finishAgentRun(run, { status: "failed", errorMessage: `task:${taskId} not found` });
+      res.status(404).json({ ok: false, error: "Task not found" });
+      return;
+    }
+
+    let comments: FirebaseFirestore.DocumentData[] = [];
+    if (includeComments) {
+      const commentsSnap = await db
+        .collection(paths.taskComments(resolvedProductId, taskId))
+        .orderBy("createdAt", "desc")
+        .limit(commentLimit)
+        .get();
+      comments = commentsSnap.docs.map((d) => d.data());
+    }
+
+    await finishAgentRun(run, { status: "success", outputSummary: `task:${taskId}` });
+    res.json({
+      ok: true,
+      data: {
+        requestedProductId: requestedProductId || null,
+        productId: resolvedProductId,
+        task: taskData,
+        comments,
+      },
+    });
+  } catch (error) {
+    await finishAgentRun(run, { status: "failed", errorMessage: (error as Error).message });
+    res.status(400).json({ ok: false, error: (error as Error).message });
+  }
+});
+
 openclaw.post("/api/openclaw/createTask", async (req, res) => {
   let run: FirebaseFirestore.DocumentReference | null = null;
   try {

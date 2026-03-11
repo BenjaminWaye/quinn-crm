@@ -78,6 +78,7 @@ All are `POST` and require header `x-openclaw-key: <OPENCLOW_SECRET>`.
 - `/api/openclaw/listProducts`
 - `/api/openclaw/getProductOverview`
 - `/api/openclaw/listTasks`
+- `/api/openclaw/getTask`
 - `/api/openclaw/createTask`
 - `/api/openclaw/updateTask`
 - `/api/openclaw/addTaskComment`
