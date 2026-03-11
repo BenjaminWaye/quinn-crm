@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, statSync, readdirSync } from 'node:fs';
+import { readFileSync, statSync, readdirSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { resolve, basename, extname } from 'node:path';
 
@@ -595,6 +595,17 @@ async function cmdSyncSchedules(args) {
     return parseDow(dowRaw).map((day) => ({ day, time, label }));
   };
 
+  // Optional mapping file: config/schedule-product-map.json => { "jobId": "productId" }
+  let productMap = {};
+  try {
+    const mapPath = resolve(process.cwd(), args.mapPath || 'config/schedule-product-map.json');
+    if (existsSync(mapPath)) {
+      productMap = JSON.parse(readFileSync(mapPath, 'utf8')) || {};
+    }
+  } catch {
+    productMap = {};
+  }
+
   // Pull local cron jobs from OpenClaw CLI
   const raw = execSync('openclaw cron list --all --json', { encoding: 'utf8' });
   const parsed = JSON.parse(raw);
@@ -614,6 +625,10 @@ async function cmdSyncSchedules(args) {
     const name = String(j?.name || j?.id || j?.jobId || 'Unnamed schedule');
     const nextRuns = j?.state?.nextRunAtMs ? [new Date(Number(j.state.nextRunAtMs)).toISOString()] : [];
 
+    const jobId = String(j?.id || j?.jobId || '');
+    const tagMatch = name.match(/\[\s*product\s*:\s*([a-zA-Z0-9_-]+)\s*\]/i);
+    const productId = (productMap && productMap[jobId]) || (tagMatch ? String(tagMatch[1]).trim() : null);
+
     let weekSlots = [];
     if (scheduleType === 'cron') {
       weekSlots = parseCronWeekSlots(String(schedule?.expr || ''), name);
@@ -629,12 +644,12 @@ async function cmdSyncSchedules(args) {
     }
 
     return {
-      id: String(j?.id || j?.jobId || ''),
+      id: jobId,
       name,
       enabled: j?.enabled !== false,
       alwaysRunning: false,
       color: '',
-      productId: null,
+      productId: productId || null,
       scheduleType,
       expression,
       tags: [],
