@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { resolve, basename, extname } from 'node:path';
 
 /**
@@ -82,6 +82,26 @@ async function postJson(url, body) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function listFilesRecursive(root, exts = new Set(), ignoreDirs = new Set()) {
+  const out = [];
+  const walk = (dir, relBase = '') => {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const ent of entries) {
+      const abs = resolve(dir, ent.name);
+      const rel = relBase ? `${relBase}/${ent.name}` : ent.name;
+      if (ent.isDirectory()) {
+        if (ignoreDirs.has(ent.name)) continue;
+        walk(abs, rel);
+        continue;
+      }
+      const ext = extname(ent.name).toLowerCase();
+      if (!exts.size || exts.has(ext)) out.push(rel);
+    }
+  };
+  walk(root, '');
+  return out;
 }
 
 async function cmdPoll(args) {
@@ -168,42 +188,64 @@ async function cmdPollAndWork(args) {
       // non-fatal
     }
 
-    // Phase-1 auto-work: for each agent-owned in_progress task, ask missing info and block & assign to human
+    // Phase-1 auto-work: for each agent-owned task, ask missing info only once and avoid false re-blocking
     for (const t of tasks) {
       try {
         const isAgent = (t.assignedType === 'agent') || String(t.createdBy || '').startsWith('quinn-');
-        const needsWork = t.status === 'in_progress' && Array.isArray(t.checklist) && t.checklist.some((c) => !c.done);
-        if (isAgent && needsWork) {
-          // Build missing-info questions (concise)
-          const commentLines = [
-            'I will complete remaining checklist items. Missing info needed to finish:',
-            '1) Travel dates or flexibility (exact dates or +/- days/month).',
-            '2) Preferred departure airport(s) (e.g., ARN) or acceptable alternatives.',
-            '3) Cabin preference and max budget per person.',
-            '4) Airline exclusions or loyalty preference.',
-            '5) Do you want me to book or only provide options/links?',
-            '',
-            'Please reply here so I can finish the research and complete the checklist. —Quinn',
-          ];
+        const hasOpenChecklist = Array.isArray(t.checklist) && t.checklist.some((c) => !c.done);
+        if (!isAgent || !hasOpenChecklist) continue;
 
-          await postJson(ADD_TASK_COMMENT_URL, {
-            productId,
-            agentId: DEFAULT_AGENT_ID,
-            taskId: t.id,
-            body: commentLines.join('\n'),
-          });
+        const description = String(t.description || '').toLowerCase();
+        const latest = String(t.latestCommentPreview || '').toLowerCase();
+        const hasNumberedAnswers = /\b1\./.test(description) && /\b2\./.test(description) && /\b3\./.test(description) && /\b4\./.test(description) && /\b5\./.test(description);
+        const hasConstraintHints = /(arn|travel|cheapest|under\s*14\s*hours|provide options)/.test(description) || /(arn|travel|cheapest|under\s*14\s*hours|provide options)/.test(latest);
+        const hasProvidedAnswers = hasNumberedAnswers || hasConstraintHints;
+        const templateAlreadyPosted = latest.includes('missing info needed to finish');
 
-          // Update task: set status blocked and owner to Benjamin (manual identity string)
+        // If answers are present and task is blocked, move back to in_progress and keep it with agent flow.
+        if (hasProvidedAnswers && t.status === 'blocked') {
           await postJson(UPDATE_TASK_URL, {
             productId,
             agentId: DEFAULT_AGENT_ID,
             taskId: t.id,
             patch: {
-              status: 'blocked',
-              owner: 'Benjamin',
+              status: 'in_progress',
             },
           });
+          continue;
         }
+
+        // Only request missing info when task is actively in progress, answers are not present, and template is not already the latest comment.
+        const needsMissingInfoPrompt = t.status === 'in_progress' && !hasProvidedAnswers && !templateAlreadyPosted;
+        if (!needsMissingInfoPrompt) continue;
+
+        const commentLines = [
+          'I will complete remaining checklist items. Missing info needed to finish:',
+          '1) Travel dates or flexibility (exact dates or +/- days/month).',
+          '2) Preferred departure airport(s) (e.g., ARN) or acceptable alternatives.',
+          '3) Cabin preference and max budget per person.',
+          '4) Airline exclusions or loyalty preference.',
+          '5) Do you want me to book or only provide options/links?',
+          '',
+          'Please reply here so I can finish the research and complete the checklist. —Quinn',
+        ];
+
+        await postJson(ADD_TASK_COMMENT_URL, {
+          productId,
+          agentId: DEFAULT_AGENT_ID,
+          taskId: t.id,
+          body: commentLines.join('\n'),
+        });
+
+        await postJson(UPDATE_TASK_URL, {
+          productId,
+          agentId: DEFAULT_AGENT_ID,
+          taskId: t.id,
+          patch: {
+            status: 'blocked',
+            owner: 'Benjamin',
+          },
+        });
       } catch (err) {
         // non-fatal per-task
         console.error('auto-work error:', err.message || err);
@@ -315,7 +357,7 @@ async function cmdSyncDocs(args) {
       const st = statSync(abs);
       const words = content.trim() ? content.trim().split(/\s+/).length : 0;
       docs.push({
-        id: rel.replace(/[^a-zA-Z0-9._/-]/g, '_'),
+        id: rel.replace(/[^a-zA-Z0-9._-]/g, '_'),
         name: basename(rel),
         type: extname(rel).replace('.', '') || 'text',
         sourceFile: rel,
@@ -341,12 +383,126 @@ async function cmdSyncDocs(args) {
   console.log(JSON.stringify({ ok: true, action: 'sync-docs', sent: docs.length, response: data }, null, 2));
 }
 
+async function cmdSyncWorkspaceDocs(args) {
+  const agentId = args.agentId || DEFAULT_AGENT_ID;
+  const root = resolve(args.root || process.cwd());
+  const extList = (args.extensions || '.md,.markdown,.txt,.html,.htm,.pdf,.mp4,.mov,.webm,.jpg,.jpeg,.png,.gif,.webp,.csv,.json')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const exts = new Set(extList);
+  const ignoreDirs = new Set(['.git', 'node_modules', '.openclaw', '.trash', '.clawhub']);
+  const textExts = new Set(['.md', '.markdown', '.txt', '.html', '.htm', '.csv', '.json']);
+
+  const files = args.files
+    ? String(args.files).split(',').map((s) => s.trim()).filter(Boolean)
+    : listFilesRecursive(root, exts, ignoreDirs);
+  const docs = [];
+  for (const rel of files) {
+    const abs = resolve(root, rel);
+    try {
+      const st = statSync(abs);
+      const ext = extname(rel).toLowerCase();
+      const isText = textExts.has(ext);
+      let content = '';
+      let summary = '';
+      let words = 0;
+      if (isText) {
+        const raw = readFileSync(abs, 'utf8');
+        content = raw.length > 200000 ? raw.slice(0, 200000) : raw;
+        summary = content.slice(0, 280);
+        words = content.trim() ? content.trim().split(/\s+/).length : 0;
+      } else {
+        content = `[binary file not inlined: ${rel}]`;
+        summary = `Binary file metadata synced for ${rel}`;
+      }
+      docs.push({
+        id: rel.replace(/[^a-zA-Z0-9._-]/g, '_'),
+        name: basename(rel),
+        type: ext.replace('.', '') || 'bin',
+        sourceFile: rel,
+        content,
+        summary,
+        tags: ['auto-sync', 'workspace-doc', isText ? 'text' : 'binary'],
+        sizeBytes: st.size,
+        wordCount: words,
+        modifiedAt: new Date(st.mtimeMs).toISOString(),
+      });
+    } catch {
+      // skip unreadable file
+    }
+  }
+
+  const data = await postJson(`${API_BASE_URL}/openclaw/syncDocs`, {
+    agentId,
+    generatedAt: nowIso(),
+    docs,
+  });
+  console.log(JSON.stringify({ ok: true, action: 'sync-workspace-docs', sent: docs.length, response: data }, null, 2));
+}
+
+async function cmdSyncMemory(args) {
+  const agentId = args.agentId || DEFAULT_AGENT_ID;
+  const root = resolve(args.root || process.cwd());
+  const longTermPath = args.longTermPath || 'MEMORY.md';
+  const memoryDir = args.memoryDir || 'memory';
+  let longTerm = null;
+
+  try {
+    const abs = resolve(root, longTermPath);
+    const st = statSync(abs);
+    const content = readFileSync(abs, 'utf8');
+    longTerm = {
+      title: 'Long-Term Memory',
+      content,
+      sourceFile: longTermPath,
+      wordCount: content.trim() ? content.trim().split(/\s+/).length : 0,
+      updatedAt: new Date(st.mtimeMs).toISOString(),
+    };
+  } catch {
+    // optional
+  }
+
+  const entries = [];
+  try {
+    const files = listFilesRecursive(resolve(root, memoryDir), new Set(['.md']), new Set());
+    for (const relInDir of files) {
+      const rel = `${memoryDir}/${relInDir}`;
+      const abs = resolve(root, rel);
+      const st = statSync(abs);
+      const content = readFileSync(abs, 'utf8');
+      const id = rel.replace(/[^a-zA-Z0-9._-]/g, '_');
+      entries.push({
+        id,
+        title: basename(rel),
+        content,
+        summary: content.slice(0, 280),
+        tags: ['memory', 'daily'],
+        sourceFile: rel,
+        wordCount: content.trim() ? content.trim().split(/\s+/).length : 0,
+        createdAt: new Date(st.birthtimeMs || st.mtimeMs).toISOString(),
+        updatedAt: new Date(st.mtimeMs).toISOString(),
+      });
+    }
+  } catch {
+    // optional
+  }
+
+  const data = await postJson(`${API_BASE_URL}/openclaw/syncMemory`, {
+    agentId,
+    generatedAt: nowIso(),
+    longTerm,
+    entries,
+  });
+  console.log(JSON.stringify({ ok: true, action: 'sync-memory', longTerm: !!longTerm, entries: entries.length, response: data }, null, 2));
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0];
 
   if (!cmd || ['help', '-h', '--help'].includes(cmd)) {
-    console.log('Usage: poll | create | update | comment | list-contacts | sync-docs (see file header for examples)');
+    console.log('Usage: poll | poll-and-work | create | update | comment | list-contacts | sync-docs | sync-workspace-docs | sync-memory (see file header for examples)');
     return;
   }
 
@@ -357,6 +513,8 @@ async function main() {
   if (cmd === 'comment') return cmdComment(args);
   if (cmd === 'list-contacts') return cmdListContacts(args);
   if (cmd === 'sync-docs') return cmdSyncDocs(args);
+  if (cmd === 'sync-workspace-docs') return cmdSyncWorkspaceDocs(args);
+  if (cmd === 'sync-memory') return cmdSyncMemory(args);
 
   throw new Error(`Unknown command: ${cmd}`);
 }

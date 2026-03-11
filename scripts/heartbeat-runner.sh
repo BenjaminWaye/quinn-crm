@@ -1,23 +1,74 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Run from workspace root
 WORKSPACE_ROOT="$(pwd)"
-. "$WORKSPACE_ROOT/quinn-crm/functions/.env"
-DATE=$(date +%F)
-TMP1="sync_memory_${DATE}.md"
-TMP2="sync_activity_${DATE}-heartbeat.md"
-# Copy if present
-[ -f "$WORKSPACE_ROOT/memory/${DATE}.md" ] && cp "$WORKSPACE_ROOT/memory/${DATE}.md" "$WORKSPACE_ROOT/$TMP1" || true
-[ -f "$WORKSPACE_ROOT/activity_notes/${DATE}-heartbeat.md" ] && cp "$WORKSPACE_ROOT/activity_notes/${DATE}-heartbeat.md" "$WORKSPACE_ROOT/$TMP2" || true
-# Build files arg (always include the primary docs too)
-FILES=("README-front.md" "README-backend.md" "AGENTS.md" "USER.md")
-[ -f "$WORKSPACE_ROOT/$TMP1" ] && FILES+=("$TMP1")
-[ -f "$WORKSPACE_ROOT/$TMP2" ] && FILES+=("$TMP2")
-FILES_ARG="$(IFS=,; echo "${FILES[*]}")"
-# Run sync-docs
-node quinn-crm/scripts/dashboard-relay.mjs sync-docs --files="$FILES_ARG"
-# Run the auto-worker
+
+if [ -f "$WORKSPACE_ROOT/quinn-crm/functions/.env" ]; then
+  set -a
+  . "$WORKSPACE_ROOT/quinn-crm/functions/.env"
+  set +a
+fi
+BASE_AGENT_ID="${DEFAULT_AGENT_ID:-quinn-main}"
+
+TMP_DIR="$WORKSPACE_ROOT/.openclaw/tmp-sync"
+mkdir -p "$TMP_DIR"
+CHUNKS_JSON="$TMP_DIR/doc_chunks.json"
+
+python3 - <<'PY'
+import json
+from pathlib import Path
+root = Path.cwd()
+out = root / '.openclaw' / 'tmp-sync' / 'doc_chunks.json'
+allowed_ext = {
+    '.md', '.markdown', '.txt', '.html', '.htm', '.pdf', '.mp4', '.mov', '.webm',
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.csv', '.json'
+}
+include_dirs = [
+    'memory', 'activity_notes', 'intel', 'tasks', 'ops', 'docs', 'exports',
+    'frames', 'frames5', 'cuts', 'cuts2', 'cuts3', 'cuts4', 'cuts5', 'adoc-export',
+    'ComfyUI/output'
+]
+files = []
+for p in root.iterdir():
+    if p.is_file() and p.suffix.lower() in allowed_ext:
+        files.append(p.relative_to(root).as_posix())
+for d in include_dirs:
+    dp = root / d
+    if not dp.exists() or not dp.is_dir():
+        continue
+    for p in dp.rglob('*'):
+        if p.is_file() and p.suffix.lower() in allowed_ext:
+            files.append(p.relative_to(root).as_posix())
+files = sorted(set(files))
+# keep chunks small to avoid firestore transaction limits
+chunk_size = 80
+chunks = [files[i:i+chunk_size] for i in range(0, len(files), chunk_size)]
+out.write_text(json.dumps(chunks), encoding='utf-8')
+print(f"Prepared {len(files)} files in {len(chunks)} chunks")
+PY
+
+# 1) Sync workspace docs/media in chunked snapshots under partitioned agentIds
+CHUNK_COUNT=$(python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path('.openclaw/tmp-sync/doc_chunks.json')
+print(len(json.loads(p.read_text(encoding='utf-8'))))
+PY
+)
+
+for ((i=0; i<CHUNK_COUNT; i++)); do
+  FILES_ARG=$(python3 - <<PY
+import json
+from pathlib import Path
+chunks = json.loads(Path('.openclaw/tmp-sync/doc_chunks.json').read_text(encoding='utf-8'))
+print(','.join(chunks[$i]))
+PY
+)
+  AGENT_ID="${BASE_AGENT_ID}-docs-${i}"
+  node quinn-crm/scripts/dashboard-relay.mjs sync-workspace-docs --agentId="$AGENT_ID" --root="$WORKSPACE_ROOT" --files="$FILES_ARG"
+done
+
+# 2) Sync memory via dedicated memory endpoint (single authoritative agentId)
+node quinn-crm/scripts/dashboard-relay.mjs sync-memory --agentId="$BASE_AGENT_ID" --root="$WORKSPACE_ROOT" --longTermPath="MEMORY.md" --memoryDir="memory"
+
+# 3) Run auto-worker for agent tasks
 node quinn-crm/scripts/dashboard-relay.mjs poll-and-work
-# Cleanup
-[ -f "$WORKSPACE_ROOT/$TMP1" ] && rm "$WORKSPACE_ROOT/$TMP1" || true
-[ -f "$WORKSPACE_ROOT/$TMP2" ] && rm "$WORKSPACE_ROOT/$TMP2" || true
