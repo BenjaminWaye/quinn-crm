@@ -153,6 +153,19 @@ export function ProductTaskPage() {
       setCommentError("");
       await addTaskComment({ productId, taskId, body: body.trim() });
       setBody("");
+      const shouldMoveToInProgress = window.confirm(
+        "Move this task back to in_progress and assign it to agent?",
+      );
+      if (shouldMoveToInProgress) {
+        await updateTask({
+          productId,
+          taskId,
+          patch: {
+            status: "in_progress",
+            assignedType: "agent",
+          },
+        });
+      }
       await load();
     } catch (nextError) {
       setCommentError((nextError as Error)?.message || "Failed to save comment");
