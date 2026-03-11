@@ -100,6 +100,29 @@ function slugify(input: string): string {
     .slice(0, 64);
 }
 
+async function resolveProductId(input: string): Promise<string> {
+  const raw = input.trim();
+  if (!raw) return raw;
+
+  // Fast path: already a valid product document id.
+  const direct = await db.doc(paths.product(raw)).get();
+  if (direct.exists) return raw;
+
+  const normalized = slugify(raw);
+  if (normalized) {
+    const normalizedDoc = await db.doc(paths.product(normalized)).get();
+    if (normalizedDoc.exists) return normalized;
+
+    const bySlug = await db.collection("products").where("slug", "==", normalized).limit(1).get();
+    if (!bySlug.empty) return bySlug.docs[0].id;
+  }
+
+  const byExactName = await db.collection("products").where("name", "==", raw).limit(1).get();
+  if (!byExactName.empty) return byExactName.docs[0].id;
+
+  return raw;
+}
+
 function requireString(value: unknown, field: string, min = 1, max = 5000): string {
   if (typeof value !== "string") {
     throw new Error(`${field} must be a string`);
@@ -994,13 +1017,21 @@ openclaw.post("/api/openclaw/listTasks", async (req, res) => {
 
   const run = await startAgentRun({ productId, agentId, action: "listTasks" });
   try {
-    let q: FirebaseFirestore.Query = db.collection(paths.tasks(productId));
+    const resolvedProductId = await resolveProductId(productId);
+    let q: FirebaseFirestore.Query = db.collection(paths.tasks(resolvedProductId));
     if (status && TASK_STATUSES.includes(status as TaskStatus)) {
       q = q.where("status", "==", status);
     }
     const snap = await q.orderBy("updatedAt", "desc").limit(take).get();
     await finishAgentRun(run, { status: "success", outputSummary: `count:${snap.size}` });
-    res.json({ ok: true, data: { items: snap.docs.map((d) => d.data()) } });
+    res.json({
+      ok: true,
+      data: {
+        productId: resolvedProductId,
+        requestedProductId: productId,
+        items: snap.docs.map((d) => d.data()),
+      },
+    });
   } catch (error) {
     await finishAgentRun(run, { status: "failed", errorMessage: (error as Error).message });
     res.status(400).json({ ok: false, error: (error as Error).message });
