@@ -41,6 +41,7 @@ const CREATE_TASK_URL = env.CREATE_TASK_URL || `${API_BASE_URL}/openclaw/createT
 const UPDATE_TASK_URL = env.UPDATE_TASK_URL || `${API_BASE_URL}/openclaw/updateTask`;
 const ADD_TASK_COMMENT_URL = env.ADD_TASK_COMMENT_URL || `${API_BASE_URL}/openclaw/addTaskComment`;
 const ADD_ACTIVITY_NOTE_URL = env.ADD_ACTIVITY_NOTE_URL || `${API_BASE_URL}/openclaw/addActivityNote`;
+const LIST_TASK_COMMENTS_URL = env.LIST_TASK_COMMENTS_URL || `${API_BASE_URL}/openclaw/listTaskComments`;
 const DEFAULT_AGENT_ID = env.DEFAULT_AGENT_ID || 'quinn-main';
 
 function parseArgs(argv) {
@@ -197,10 +198,47 @@ async function cmdPollAndWork(args) {
 
         const description = String(t.description || '').toLowerCase();
         const latest = String(t.latestCommentPreview || '').toLowerCase();
-        const hasNumberedAnswers = /\b1\./.test(description) && /\b2\./.test(description) && /\b3\./.test(description) && /\b4\./.test(description) && /\b5\./.test(description);
-        const hasConstraintHints = /(arn|travel|cheapest|under\s*14\s*hours|provide options)/.test(description) || /(arn|travel|cheapest|under\s*14\s*hours|provide options)/.test(latest);
-        const hasProvidedAnswers = hasNumberedAnswers || hasConstraintHints;
-        const templateAlreadyPosted = latest.includes('missing info needed to finish');
+
+        // Fetch full recent comments to avoid relying only on latestCommentPreview
+        let recentComments = [];
+        try {
+          const commentsRes = await postJson(LIST_TASK_COMMENTS_URL, {
+            productId,
+            taskId: t.id,
+            agentId: DEFAULT_AGENT_ID,
+            limit: 20,
+          });
+          recentComments = Array.isArray(commentsRes?.data?.items)
+            ? commentsRes.data.items
+            : Array.isArray(commentsRes?.data)
+              ? commentsRes.data
+              : [];
+        } catch {
+          // non-fatal: fallback to task-level preview/description heuristics
+          recentComments = [];
+        }
+
+        const allComments = recentComments.map((c) => ({
+          authorType: String(c?.authorType || '').toLowerCase(),
+          body: String(c?.body || ''),
+          bodyLc: String(c?.body || '').toLowerCase(),
+        }));
+        const allCommentText = allComments.map((c) => c.bodyLc).join('\n');
+
+        const templateAlreadyPosted = latest.includes('missing info needed to finish')
+          || allCommentText.includes('missing info needed to finish');
+
+        // Generic answer detection (task-agnostic): if a human replied after the missing-info template,
+        // we consider inputs provided and stop re-blocking/re-posting template prompts.
+        const templateIdx = allComments.findIndex((c) => c.bodyLc.includes('missing info needed to finish'));
+        const hasHumanAfterTemplate = templateIdx >= 0
+          ? allComments.slice(0, templateIdx).some((c) => c.authorType !== 'agent' && c.body.trim().length > 0)
+          : allComments.some((c) => c.authorType !== 'agent' && c.body.trim().length > 0);
+
+        // Additional fallback: if task description was enriched beyond the original base text, treat as provided.
+        const hasDescriptionSupplement = description.includes('\n') && description.split('\n').length > 1;
+
+        const hasProvidedAnswers = hasHumanAfterTemplate || hasDescriptionSupplement;
 
         // If answers are present and task is blocked, move back to in_progress and keep it with agent flow.
         if (hasProvidedAnswers && t.status === 'blocked') {
