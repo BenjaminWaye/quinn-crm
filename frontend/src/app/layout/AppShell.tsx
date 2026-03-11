@@ -17,6 +17,7 @@ export function AppShell() {
   const { user, logout } = useSession();
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [mobileProductSwitcherOpen, setMobileProductSwitcherOpen] = useState(false);
   const [desktopProductSwitcherOpen, setDesktopProductSwitcherOpen] = useState(false);
   const [desktopNavHidden, setDesktopNavHidden] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -108,6 +109,7 @@ export function AppShell() {
     if (isMobile) {
       setMobileSidebarOpen(false);
       setDesktopProductSwitcherOpen(false);
+      setMobileProductSwitcherOpen(false);
     }
   }, [location.pathname, isMobile]);
 
@@ -179,7 +181,10 @@ export function AppShell() {
       <header className="h-14 border-b border-[#1b1f2a] bg-[#0d1118] flex items-center px-3 lg:px-4 shrink-0 z-30">
         {isWorkspaceView ? (
           <button
-            onClick={() => setMobileSidebarOpen((current) => !current)}
+            onClick={() => {
+              setMobileProductSwitcherOpen(false);
+              setMobileSidebarOpen((current) => !current);
+            }}
             className="lg:hidden p-2 hover:bg-neutral-100 rounded-md transition-colors"
             aria-label="Toggle sidebar"
           >
@@ -193,7 +198,12 @@ export function AppShell() {
           {currentProduct ? (
             <button
               onClick={() => {
-                if (isWorkspaceView && !isMobile) {
+                if (isWorkspaceView && isMobile) {
+                  setMobileSidebarOpen(false);
+                  setMobileProductSwitcherOpen((current) => !current);
+                  return;
+                }
+                if (isWorkspaceView) {
                   setDesktopProductSwitcherOpen((current) => !current);
                   return;
                 }
@@ -367,18 +377,19 @@ export function AppShell() {
           </>
         )}
 
-        {isWorkspaceView && isMobile && mobileSidebarOpen && (
+        {isWorkspaceView && isMobile && mobileProductSwitcherOpen && (
           <>
-            <div className="fixed inset-0 bg-black/40 z-30" style={{ top: "3.5rem" }} onClick={() => setMobileSidebarOpen(false)} />
-            <aside className="fixed left-0 right-0 top-14 bottom-0 z-40 bg-[#0d1118] border-t border-[#1b1f2a] overflow-y-auto">
+            <div className="fixed inset-0 bg-black/40 z-30" style={{ top: "3.5rem" }} onClick={() => setMobileProductSwitcherOpen(false)} />
+            <aside className="fixed left-0 top-14 bottom-0 z-40 w-[84vw] max-w-[360px] bg-[#0d1118] border-r border-[#1b1f2a] overflow-y-auto">
               <div className="p-3 border-b border-[#1b1f2a]">
                 <h2 className="text-[11px] uppercase tracking-wide text-neutral-500 font-semibold">Products</h2>
               </div>
-              <nav className="p-2 border-b border-[#1b1f2a]">
+              <nav className="p-2">
                 {products.map((product) => (
                   <Link
                     key={product.id}
                     to={`/products/${product.id}`}
+                    onClick={() => setMobileProductSwitcherOpen(false)}
                     className={[
                       "block rounded-md px-3 py-2 text-sm mb-1",
                       product.id === activeProductId ? "bg-[#171c27] text-white font-medium" : "text-neutral-300 hover:bg-[#121722]",
@@ -387,8 +398,65 @@ export function AppShell() {
                     {product.name}
                   </Link>
                 ))}
+                {!loading && products.length === 0 && <div className="p-3 text-sm text-neutral-500">No products yet.</div>}
               </nav>
+              <div className="p-3 border-t border-[#1b1f2a] space-y-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreateProductError("");
+                    setShowAddProductPopover((current) => !current);
+                  }}
+                  className="w-full text-left text-sm text-neutral-300 hover:text-white hover:bg-[#121722] rounded-md px-2 py-2"
+                >
+                  + Add new product
+                </button>
+                {showAddProductPopover && (
+                  <div className="rounded-md border border-[#2a3345] bg-[#0b1017] p-2 space-y-2">
+                    <input
+                      className="w-full border border-[#2a3345] rounded px-2 py-1.5 text-sm bg-[#0d1118]"
+                      placeholder="Name"
+                      value={newProductName}
+                      onChange={(event) => setNewProductName(event.target.value)}
+                    />
+                    <input
+                      className="w-full border border-[#2a3345] rounded px-2 py-1.5 text-sm bg-[#0d1118]"
+                      placeholder="Repo URL (optional)"
+                      value={newProductRepo}
+                      onChange={(event) => setNewProductRepo(event.target.value)}
+                    />
+                    <textarea
+                      className="w-full border border-[#2a3345] rounded px-2 py-1.5 text-sm min-h-[64px] bg-[#0d1118]"
+                      placeholder="Description (optional)"
+                      value={newProductDescription}
+                      onChange={(event) => setNewProductDescription(event.target.value)}
+                    />
+                    <textarea
+                      className="w-full border border-[#2a3345] rounded px-2 py-1.5 text-sm min-h-[64px] bg-[#0d1118]"
+                      placeholder="Mission (optional)"
+                      value={newProductMission}
+                      onChange={(event) => setNewProductMission(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void onCreateProduct()}
+                      disabled={creatingProduct || !newProductName.trim()}
+                      className="w-full rounded bg-[#4f46e5] hover:bg-[#4338ca] disabled:opacity-60 text-white text-sm px-3 py-2"
+                    >
+                      {creatingProduct ? "Creating..." : "Create product"}
+                    </button>
+                    {createProductError && <p className="text-xs text-red-400">{createProductError}</p>}
+                  </div>
+                )}
+              </div>
+            </aside>
+          </>
+        )}
 
+        {isWorkspaceView && isMobile && mobileSidebarOpen && (
+          <>
+            <div className="fixed inset-0 bg-black/40 z-30" style={{ top: "3.5rem" }} onClick={() => setMobileSidebarOpen(false)} />
+            <aside className="fixed left-0 top-14 bottom-0 z-40 w-[84vw] max-w-[360px] bg-[#0d1118] border-r border-[#1b1f2a] overflow-y-auto">
               <div className="p-3 border-b border-[#1b1f2a]">
                 <h2 className="text-[11px] uppercase tracking-wide text-neutral-500 font-semibold">Product</h2>
               </div>
@@ -397,6 +465,7 @@ export function AppShell() {
                   <Link
                     key={tab.to}
                     to={tab.to}
+                    onClick={() => setMobileSidebarOpen(false)}
                     className={[
                       "block rounded-md px-3 py-2 text-sm mb-1",
                       tab.active ? "bg-[#4f46e5] text-white font-medium" : "text-neutral-300 hover:bg-[#121722]",
@@ -416,6 +485,7 @@ export function AppShell() {
                   <Link
                     key={tab.to}
                     to={tab.to}
+                    onClick={() => setMobileSidebarOpen(false)}
                     className={[
                       "block rounded-md px-3 py-2 text-sm mb-1",
                       tab.active ? "bg-[#4f46e5] text-white font-medium" : "text-neutral-300 hover:bg-[#121722]",
