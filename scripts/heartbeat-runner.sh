@@ -70,5 +70,5 @@ done
 # 2) Sync memory via dedicated memory endpoint (single authoritative agentId)
 node quinn-crm/scripts/dashboard-relay.mjs sync-memory --agentId="$BASE_AGENT_ID" --root="$WORKSPACE_ROOT" --longTermPath="MEMORY.md" --memoryDir="memory"
 
-# 3) Run auto-worker for agent tasks
-node quinn-crm/scripts/dashboard-relay.mjs poll-and-work
+# 3) Run auto-worker for agent tasks across all products (ignore DEFAULT_PRODUCT_ID for this step)
+DEFAULT_PRODUCT_ID="" node quinn-crm/scripts/dashboard-relay.mjs poll-and-work
