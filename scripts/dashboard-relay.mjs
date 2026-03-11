@@ -127,6 +127,93 @@ async function cmdPoll(args) {
   console.log(JSON.stringify({ ok: true, action: 'poll', products: all }, null, 2));
 }
 
+async function cmdPollAndWork(args) {
+  // Poll like cmdPoll but attempt Phase-1 auto-work: comment & block agent tasks needing human input
+  const explicitProductId = args.productId || env.DEFAULT_PRODUCT_ID;
+  let productIds = explicitProductId ? [explicitProductId] : [];
+
+  if (productIds.length === 0) {
+    const lp = await postJson(`${API_BASE_URL}/openclaw/listProducts`, {});
+    const items = Array.isArray(lp?.data?.items) ? lp.data.items : [];
+    productIds = items.map((p) => p?.id).filter(Boolean);
+    if (productIds.length === 0) {
+      throw new Error('No products found. Set DEFAULT_PRODUCT_ID or create a product first.');
+    }
+  }
+
+  const all = [];
+  for (const productId of productIds) {
+    const data = await postJson(`${API_BASE_URL}/openclaw/listTasks`, { productId });
+    const tasks = Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.tasks) ? data.tasks : [];
+    const summary = {
+      at: nowIso(),
+      productId,
+      count: tasks.length,
+      backlog: tasks.filter((t) => t?.status === 'backlog' || t?.status === 'todo').length,
+      in_progress: tasks.filter((t) => t?.status === 'in_progress').length,
+      blocked: tasks.filter((t) => t?.status === 'blocked').length,
+      review: tasks.filter((t) => t?.status === 'review').length,
+      done: tasks.filter((t) => t?.status === 'done').length,
+    };
+    all.push({ productId, summary, tasks });
+
+    // Post an activity note
+    try {
+      await postJson(ADD_ACTIVITY_NOTE_URL, {
+        productId,
+        agentId: DEFAULT_AGENT_ID,
+        message: `[relay poll-and-work] ${summary.count} tasks | backlog:${summary.backlog} in_progress:${summary.in_progress} blocked:${summary.blocked} review:${summary.review} done:${summary.done}`,
+      });
+    } catch {
+      // non-fatal
+    }
+
+    // Phase-1 auto-work: for each agent-owned in_progress task, ask missing info and block & assign to human
+    for (const t of tasks) {
+      try {
+        const isAgent = (t.assignedType === 'agent') || String(t.createdBy || '').startsWith('quinn-');
+        const needsWork = t.status === 'in_progress' && Array.isArray(t.checklist) && t.checklist.some((c) => !c.done);
+        if (isAgent && needsWork) {
+          // Build missing-info questions (concise)
+          const commentLines = [
+            'I will complete remaining checklist items. Missing info needed to finish:',
+            '1) Travel dates or flexibility (exact dates or +/- days/month).',
+            '2) Preferred departure airport(s) (e.g., ARN) or acceptable alternatives.',
+            '3) Cabin preference and max budget per person.',
+            '4) Airline exclusions or loyalty preference.',
+            '5) Do you want me to book or only provide options/links?',
+            '',
+            'Please reply here so I can finish the research and complete the checklist. —Quinn',
+          ];
+
+          await postJson(ADD_TASK_COMMENT_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            body: commentLines.join('\n'),
+          });
+
+          // Update task: set status blocked and owner to Benjamin (manual identity string)
+          await postJson(UPDATE_TASK_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            patch: {
+              status: 'blocked',
+              owner: 'Benjamin',
+            },
+          });
+        }
+      } catch (err) {
+        // non-fatal per-task
+        console.error('auto-work error:', err.message || err);
+      }
+    }
+  }
+
+  console.log(JSON.stringify({ ok: true, action: 'poll-and-work', products: all }, null, 2));
+}
+
 async function cmdCreate(args) {
   const title = args.title || 'Untitled task';
   const description = args.description || 'No description provided.';
@@ -264,6 +351,7 @@ async function main() {
   }
 
   if (cmd === 'poll') return cmdPoll(args);
+  if (cmd === 'poll-and-work') return cmdPollAndWork(args);
   if (cmd === 'create') return cmdCreate(args);
   if (cmd === 'update') return cmdUpdate(args);
   if (cmd === 'comment') return cmdComment(args);
