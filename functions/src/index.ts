@@ -983,7 +983,8 @@ openclaw.post("/api/openclaw/getProductOverview", async (req, res) => {
 openclaw.post("/api/openclaw/listTasks", async (req, res) => {
   const productId = String(req.body?.productId ?? "").trim();
   const agentId = String(req.body?.agentId ?? "openclaw").trim();
-  const status = String(req.body?.status ?? "").trim();
+  const requestedStatus = String(req.body?.status ?? "").trim();
+  const status = String(normalizeTaskStatusInput(requestedStatus) ?? "").trim();
   const take = Math.min(Number(req.body?.limit ?? 20), 100);
 
   if (!productId) {
@@ -994,7 +995,7 @@ openclaw.post("/api/openclaw/listTasks", async (req, res) => {
   const run = await startAgentRun({ productId, agentId, action: "listTasks" });
   try {
     let q: FirebaseFirestore.Query = db.collection(paths.tasks(productId));
-    if (status) {
+    if (status && TASK_STATUSES.includes(status as TaskStatus)) {
       q = q.where("status", "==", status);
     }
     const snap = await q.orderBy("updatedAt", "desc").limit(take).get();
