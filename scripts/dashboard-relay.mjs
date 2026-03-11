@@ -541,6 +541,40 @@ async function cmdSyncSchedules(args) {
   const agentId = args.agentId || DEFAULT_AGENT_ID;
   const timezone = args.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
+  const parseCronWeekSlots = (expr, label) => {
+    const parts = String(expr || '').trim().split(/\s+/);
+    if (parts.length < 5) return [];
+    const [minRaw, hourRaw, , , dowRaw] = parts;
+    if (!/^\d{1,2}$/.test(minRaw) || !/^\d{1,2}$/.test(hourRaw)) return [];
+    const hh = String(Number(hourRaw)).padStart(2, '0');
+    const mm = String(Number(minRaw)).padStart(2, '0');
+    const time = `${hh}:${mm}`;
+
+    const parseDow = (raw) => {
+      const s = String(raw || '*').trim();
+      if (s === '*') return [0, 1, 2, 3, 4, 5, 6];
+      const out = new Set();
+      for (const token of s.split(',')) {
+        const t = token.trim();
+        if (!t) continue;
+        if (t.includes('-')) {
+          const [aRaw, bRaw] = t.split('-');
+          const a = Number(aRaw);
+          const b = Number(bRaw);
+          if (Number.isInteger(a) && Number.isInteger(b)) {
+            for (let d = a; d <= b; d++) out.add(d === 7 ? 0 : d);
+          }
+        } else {
+          const d = Number(t);
+          if (Number.isInteger(d)) out.add(d === 7 ? 0 : d);
+        }
+      }
+      return [...out].filter((d) => d >= 0 && d <= 6).sort((a, b) => a - b);
+    };
+
+    return parseDow(dowRaw).map((day) => ({ day, time, label }));
+  };
+
   // Pull local cron jobs from OpenClaw CLI
   const raw = execSync('openclaw cron list --all --json', { encoding: 'utf8' });
   const parsed = JSON.parse(raw);
@@ -557,9 +591,26 @@ async function cmdSyncSchedules(args) {
           ? `at:${String(schedule?.at || '')}`
           : '';
 
+    const name = String(j?.name || j?.id || j?.jobId || 'Unnamed schedule');
+    const nextRuns = j?.state?.nextRunAtMs ? [new Date(Number(j.state.nextRunAtMs)).toISOString()] : [];
+
+    let weekSlots = [];
+    if (scheduleType === 'cron') {
+      weekSlots = parseCronWeekSlots(String(schedule?.expr || ''), name);
+    } else if (nextRuns.length > 0) {
+      // Fallback visualization: place non-cron jobs at their next-run day/time
+      const dt = new Date(nextRuns[0]);
+      if (!Number.isNaN(dt.getTime())) {
+        const day = dt.getUTCDay();
+        const hh = String(dt.getUTCHours()).padStart(2, '0');
+        const mm = String(dt.getUTCMinutes()).padStart(2, '0');
+        weekSlots = [{ day, time: `${hh}:${mm}`, label: name }];
+      }
+    }
+
     return {
       id: String(j?.id || j?.jobId || ''),
-      name: String(j?.name || j?.id || j?.jobId || 'Unnamed schedule'),
+      name,
       enabled: j?.enabled !== false,
       alwaysRunning: false,
       color: '',
@@ -567,8 +618,8 @@ async function cmdSyncSchedules(args) {
       scheduleType,
       expression,
       tags: [],
-      weekSlots: [],
-      nextRuns: j?.state?.nextRunAtMs ? [new Date(Number(j.state.nextRunAtMs)).toISOString()] : [],
+      weekSlots,
+      nextRuns,
       sourceUpdatedAt: new Date(Number(j?.updatedAtMs || Date.now())).toISOString(),
     };
   }).filter((j) => j.id);
