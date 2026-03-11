@@ -4,7 +4,7 @@ import { createProduct } from "../lib/data";
 import { useProducts } from "../app/providers";
 
 export function ProductsPage() {
-  const { products, loading, refresh } = useProducts();
+  const { products, loading, refresh, upsertProductLocal } = useProducts();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [repo, setRepo] = useState("");
@@ -19,8 +19,16 @@ export function ProductsPage() {
     try {
       setBusy(true);
       setError("");
-      await createProduct({
+      const result = await createProduct({
         name: name.trim(),
+        repo: repo.trim(),
+        description: description.trim(),
+        mission: mission.trim(),
+      });
+      upsertProductLocal({
+        id: result.data.productId,
+        name: name.trim(),
+        status: "active",
         repo: repo.trim(),
         description: description.trim(),
         mission: mission.trim(),
@@ -30,7 +38,7 @@ export function ProductsPage() {
       setDescription("");
       setMission("");
       setOpen(false);
-      await refresh();
+      void refresh();
     } catch (nextError) {
       setError((nextError as Error).message || "Failed to create product");
     } finally {

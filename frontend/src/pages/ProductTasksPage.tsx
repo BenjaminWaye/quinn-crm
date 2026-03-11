@@ -60,10 +60,48 @@ export function ProductTasksPage() {
   const onCreate = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!title.trim() || !productId || busy) return;
+    const now = new Date().toISOString();
+    const optimisticId = `tmp_${crypto.randomUUID()}`;
+    const optimisticTask: TaskRecord = {
+      id: optimisticId,
+      productId,
+      title: title.trim(),
+      description: description.trim(),
+      type,
+      status: "backlog",
+      priority,
+      dueDate: dueDate || null,
+      assignedType: assignedType || null,
+      assignedId: assignedId.trim() || null,
+      linkedContactIds: linkedContactIdsText
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+      linkedKpiKeys: linkedKpiKeysText
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+      linkedDocIds: linkedDocIdsText
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+      checklist: checklistText
+        .split("\n")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((text, index) => ({ id: `tmp_cl_${index + 1}`, text, done: false })),
+      latestCommentPreview: "",
+      commentCount: 0,
+      source,
+      blockedReason: blockedReason.trim(),
+      createdAt: now,
+      updatedAt: now,
+    };
     try {
       setBusy(true);
       setError("");
-      await createTask({
+      setTasks((current) => [optimisticTask, ...current]);
+      const result = await createTask({
         productId,
         title: title.trim(),
         description: description.trim(),
@@ -92,6 +130,17 @@ export function ProductTasksPage() {
         source,
         blockedReason: blockedReason.trim(),
       });
+      const createdTaskId = result.data.taskId;
+      setTasks((current) =>
+        current.map((task) =>
+          task.id === optimisticId
+            ? {
+                ...task,
+                id: createdTaskId,
+              }
+            : task,
+        ),
+      );
       setTitle("");
       setDescription("");
       setType("other");
@@ -106,11 +155,12 @@ export function ProductTasksPage() {
       setBlockedReason("");
       setChecklistText("");
       setShowCreateForm(false);
-      await load();
+      void load();
     } catch (nextError) {
       const message = (nextError as Error)?.message || "Failed to create task";
       setError(message);
       console.error("Failed to create task", nextError);
+      setTasks((current) => current.filter((task) => task.id !== optimisticId));
     } finally {
       setBusy(false);
     }
@@ -118,8 +168,15 @@ export function ProductTasksPage() {
 
   const onStatus = async (taskId: string, status: string) => {
     if (!productId) return;
-    await updateTaskStatus({ productId, taskId, status });
-    await load();
+    const previous = tasks.find((task) => task.id === taskId)?.status ?? "";
+    setTasks((current) => current.map((task) => (task.id === taskId ? { ...task, status, updatedAt: new Date().toISOString() } : task)));
+    try {
+      await updateTaskStatus({ productId, taskId, status });
+      void load();
+    } catch (error) {
+      console.error("Failed to update task status", error);
+      setTasks((current) => current.map((task) => (task.id === taskId ? { ...task, status: previous || task.status } : task)));
+    }
   };
 
   return (

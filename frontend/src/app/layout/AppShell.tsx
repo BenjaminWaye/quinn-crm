@@ -13,7 +13,7 @@ function useProductFromPath(pathname: string): string | null {
 export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { products, loading, refresh } = useProducts();
+  const { products, loading, refresh, upsertProductLocal } = useProducts();
   const { user, logout } = useSession();
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -162,12 +162,24 @@ export function AppShell() {
         mission: newProductMission.trim(),
       });
       const nextId = result.data.productId;
+      const nextProductName = newProductName.trim();
+      const nextProductRepo = newProductRepo.trim();
+      const nextProductDescription = newProductDescription.trim();
+      const nextProductMission = newProductMission.trim();
+      upsertProductLocal({
+        id: nextId,
+        name: nextProductName,
+        status: "active",
+        repo: nextProductRepo,
+        description: nextProductDescription,
+        mission: nextProductMission,
+      });
       setNewProductName("");
       setNewProductRepo("");
       setNewProductDescription("");
       setNewProductMission("");
       setShowAddProductPopover(false);
-      await refresh();
+      void refresh();
       navigate(`/products/${nextId}`);
     } catch (error) {
       setCreateProductError((error as Error)?.message || "Failed to create product");

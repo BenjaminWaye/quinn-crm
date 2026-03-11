@@ -7,6 +7,7 @@ type ProductsContextValue = {
   products: ProductRecord[];
   loading: boolean;
   refresh: () => Promise<void>;
+  upsertProductLocal: (product: ProductRecord) => void;
 };
 
 const ProductsContext = createContext<ProductsContextValue | null>(null);
@@ -31,7 +32,20 @@ function ProductsProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, []);
 
-  const value = useMemo(() => ({ products, loading, refresh }), [products, loading]);
+  const upsertProductLocal = (product: ProductRecord) => {
+    setProducts((current) => {
+      const next = [...current];
+      const index = next.findIndex((item) => item.id === product.id);
+      if (index >= 0) {
+        next[index] = { ...next[index], ...product };
+      } else {
+        next.push(product);
+      }
+      return next.sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER));
+    });
+  };
+
+  const value = useMemo(() => ({ products, loading, refresh, upsertProductLocal }), [products, loading]);
 
   return <ProductsContext.Provider value={value}>{children}</ProductsContext.Provider>;
 }

@@ -148,15 +148,46 @@ export function ProductTaskPage() {
   const onComment = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!productId || !taskId || !body.trim() || savingComment) return;
+    const trimmedBody = body.trim();
+    const optimisticComment: TaskCommentRecord = {
+      id: `tmp_${crypto.randomUUID()}`,
+      body: trimmedBody,
+      authorType: "owner",
+      authorId: "you",
+      createdAt: new Date().toISOString(),
+    };
     try {
       setSavingComment(true);
       setCommentError("");
-      await addTaskComment({ productId, taskId, body: body.trim() });
+      setComments((current) => [optimisticComment, ...current]);
+      setTask((current) =>
+        current
+          ? {
+              ...current,
+              latestCommentPreview: trimmedBody.slice(0, 160),
+              commentCount: Number(current.commentCount ?? 0) + 1,
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
       setBody("");
+      await addTaskComment({ productId, taskId, body: trimmedBody });
       const shouldMoveToInProgress = window.confirm(
         "Move this task back to in_progress and assign it to agent?",
       );
       if (shouldMoveToInProgress) {
+        setStatus("in_progress");
+        setAssignedType("agent");
+        setTask((current) =>
+          current
+            ? {
+                ...current,
+                status: "in_progress",
+                assignedType: "agent",
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
         await updateTask({
           productId,
           taskId,
@@ -166,10 +197,11 @@ export function ProductTaskPage() {
           },
         });
       }
-      await load();
+      void load();
     } catch (nextError) {
       setCommentError((nextError as Error)?.message || "Failed to save comment");
       console.error("Failed to save comment", nextError);
+      void load();
     } finally {
       setSavingComment(false);
     }
@@ -178,18 +210,30 @@ export function ProductTaskPage() {
   const onSaveTask = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!productId || !taskId || !title.trim() || savingTask || !hasChanges) return;
+    const patch = buildPatch();
+    setTask((current) =>
+      current
+        ? {
+            ...current,
+            ...patch,
+            updatedAt: new Date().toISOString(),
+          }
+        : current,
+    );
+    setInitialSnapshot(JSON.stringify(patch));
     try {
       setSavingTask(true);
       setTaskError("");
       await updateTask({
         productId,
         taskId,
-        patch: buildPatch(),
+        patch,
       });
-      await load();
+      void load();
     } catch (nextError) {
       setTaskError((nextError as Error)?.message || "Failed to save task");
       console.error("Failed to save task", nextError);
+      void load();
     } finally {
       setSavingTask(false);
     }
