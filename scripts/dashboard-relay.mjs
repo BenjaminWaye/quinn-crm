@@ -196,7 +196,27 @@ async function cmdPollAndWork(args) {
       try {
         const isAgent = (t.assignedType === 'agent') || String(t.createdBy || '').startsWith('quinn-');
         const hasOpenChecklist = Array.isArray(t.checklist) && t.checklist.some((c) => !c.done);
-        if (!isAgent || !hasOpenChecklist) continue;
+        if (!isAgent) continue;
+
+        // Auto-pickup: move agent backlog/todo tasks into in_progress so work can start.
+        if ((t.status === 'backlog' || t.status === 'todo')) {
+          await postJson(UPDATE_TASK_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            patch: { status: 'in_progress' },
+          });
+
+          await postJson(ADD_TASK_COMMENT_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            body: 'Auto-picked by heartbeat worker: moved to in_progress and queued for execution.',
+          });
+          continue;
+        }
+
+        if (!hasOpenChecklist) continue;
 
         const description = String(t.description || '').toLowerCase();
         const latest = String(t.latestCommentPreview || '').toLowerCase();
