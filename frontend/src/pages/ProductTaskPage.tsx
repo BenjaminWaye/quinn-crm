@@ -43,6 +43,7 @@ export function ProductTaskPage() {
   const [body, setBody] = useState("");
   const [savingComment, setSavingComment] = useState(false);
   const [commentError, setCommentError] = useState("");
+  const [shareMessage, setShareMessage] = useState("");
 
   const buildPatch = () => ({
     title: title.trim(),
@@ -197,6 +198,67 @@ export function ProductTaskPage() {
     }
   };
 
+  const taskSharePayload = useMemo(
+    () =>
+      JSON.stringify(
+        {
+          endpoint: "/api/openclaw/getTask",
+          method: "POST",
+          headers: {
+            "x-openclaw-key": "<secret>",
+            "content-type": "application/json",
+          },
+          body: {
+            productId,
+            taskId,
+            agentId: "quinn-main",
+            includeComments: true,
+            commentLimit: 20,
+          },
+        },
+        null,
+        2,
+      ),
+    [productId, taskId],
+  );
+
+  const clearShareMessageSoon = () => {
+    window.setTimeout(() => setShareMessage(""), 2500);
+  };
+
+  const onCopyTaskId = async () => {
+    try {
+      await navigator.clipboard.writeText(taskId);
+      setShareMessage("Task ID copied");
+      clearShareMessageSoon();
+    } catch (error) {
+      console.error("Failed to copy task id", error);
+      setShareMessage("Could not copy task ID");
+      clearShareMessageSoon();
+    }
+  };
+
+  const onShareWithOpenClaw = async () => {
+    const shareText = `Task reference\nproductId=${productId}\ntaskId=${taskId}\n\n${taskSharePayload}`;
+    try {
+      if (typeof navigator.share === "function") {
+        await navigator.share({
+          title: `Task ${taskId}`,
+          text: shareText,
+        });
+        setShareMessage("Shared with OpenClaw reference");
+      } else {
+        await navigator.clipboard.writeText(shareText);
+        setShareMessage("OpenClaw task payload copied");
+      }
+      clearShareMessageSoon();
+    } catch (error) {
+      console.error("Failed to share task", error);
+      setShareMessage("Could not share task reference");
+      clearShareMessageSoon();
+    }
+  };
+
   if (!task) return <div className="p-6">Task not found.</div>;
 
   return (
@@ -241,7 +303,22 @@ export function ProductTaskPage() {
 
       <div className="bg-white border border-neutral-200 rounded-lg p-4 space-y-2">
         <h3 className="font-semibold">Task metadata</h3>
+        <div className="flex flex-wrap items-center gap-2 pb-2">
+          <button type="button" className="px-3 py-1.5 border border-neutral-300 rounded-lg text-sm" onClick={() => void onCopyTaskId()}>
+            Copy Task ID
+          </button>
+          <button
+            type="button"
+            className="px-3 py-1.5 bg-neutral-900 text-white rounded-lg text-sm"
+            onClick={() => void onShareWithOpenClaw()}
+          >
+            Share with OpenClaw
+          </button>
+          {shareMessage ? <span className="text-xs text-neutral-600">{shareMessage}</span> : null}
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-neutral-700">
+          <p>taskId: {task.id ?? taskId}</p>
+          <p>productId: {productId}</p>
           <p>source: {task.source ?? "-"}</p>
           <p>commentCount: {task.commentCount ?? 0}</p>
           <p>latestCommentPreview: {task.latestCommentPreview || "-"}</p>
