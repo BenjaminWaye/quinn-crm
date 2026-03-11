@@ -983,7 +983,8 @@ openclaw.post("/api/openclaw/getProductOverview", async (req, res) => {
 openclaw.post("/api/openclaw/listTasks", async (req, res) => {
   const productId = String(req.body?.productId ?? "").trim();
   const agentId = String(req.body?.agentId ?? "openclaw").trim();
-  const status = String(req.body?.status ?? "").trim();
+  const requestedStatus = String(req.body?.status ?? "").trim();
+  const status = String(normalizeTaskStatusInput(requestedStatus) ?? "").trim();
   const take = Math.min(Number(req.body?.limit ?? 20), 100);
 
   if (!productId) {
@@ -994,7 +995,7 @@ openclaw.post("/api/openclaw/listTasks", async (req, res) => {
   const run = await startAgentRun({ productId, agentId, action: "listTasks" });
   try {
     let q: FirebaseFirestore.Query = db.collection(paths.tasks(productId));
-    if (status) {
+    if (status && TASK_STATUSES.includes(status as TaskStatus)) {
       q = q.where("status", "==", status);
     }
     const snap = await q.orderBy("updatedAt", "desc").limit(take).get();
@@ -1013,14 +1014,11 @@ openclaw.post("/api/openclaw/createTask", async (req, res) => {
     const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
     run = await startAgentRun({ productId, agentId, action: "task.create" });
 
-    const rawTitle = requireString(req.body?.title, "title", 3, 120);
-    const prefixedTitle = rawTitle.startsWith(`[${productId}]`) ? rawTitle : `[${productId}] ${rawTitle}`;
-
     const taskId = await createTaskInternal({
       productId,
       actorId: agentId,
       actorType: "agent",
-      title: prefixedTitle,
+      title: req.body?.title,
       description: req.body?.description,
       type: req.body?.type,
       priority: req.body?.priority,
@@ -1114,171 +1112,6 @@ openclaw.post("/api/openclaw/listContacts", async (req, res) => {
     res.json({ ok: true, data: { items: snap.docs.map((d) => d.data()) } });
   } catch (error) {
     await finishAgentRun(run, { status: "failed", errorMessage: (error as Error).message });
-    res.status(400).json({ ok: false, error: (error as Error).message });
-  }
-});
-
-openclaw.post("/api/openclaw/createContact", async (req, res) => {
-  let run: FirebaseFirestore.DocumentReference | null = null;
-  try {
-    const productId = requireString(req.body?.productId, "productId", 2, 120);
-    const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
-    const name = requireString(req.body?.name, "name", 2, 120);
-    run = await startAgentRun({ productId, agentId, action: "contact.create" });
-
-    const ref = db.collection(paths.contacts(productId)).doc();
-    await ref.set({
-      id: ref.id,
-      productId,
-      kind: enumOrDefault(req.body?.kind, CONTACT_KINDS, "lead"),
-      name,
-      company: req.body?.company ?? "",
-      title: req.body?.title ?? "",
-      email: req.body?.email ?? "",
-      phone: req.body?.phone ?? "",
-      linkedin: req.body?.linkedin ?? "",
-      website: req.body?.website ?? "",
-      location: req.body?.location ?? "",
-      status: enumOrDefault(req.body?.status, CONTACT_STATUSES, "new"),
-      tags: Array.isArray(req.body?.tags) ? req.body.tags : [],
-      notes: req.body?.notes ?? "",
-      linkedTaskIds: Array.isArray(req.body?.linkedTaskIds) ? req.body.linkedTaskIds : [],
-      createdBy: agentId,
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-      archivedAt: null,
-    });
-
-    await writeActivity({
-      productId,
-      type: "contact.created",
-      actorType: "agent",
-      actorId: agentId,
-      targetType: "contact",
-      targetId: ref.id,
-      message: `OpenClaw created contact: ${name}`,
-    });
-
-    await writeContactActivity({
-      productId,
-      contactId: ref.id,
-      actorType: "agent",
-      actorId: agentId,
-      type: "contact.created",
-      message: "Contact created",
-      changes: [],
-    });
-
-    await finishAgentRun(run, { status: "success", outputSummary: `contactId:${ref.id}` });
-    res.json({ ok: true, data: { contactId: ref.id } });
-  } catch (error) {
-    if (run) {
-      await finishAgentRun(run, { status: "failed", errorMessage: (error as Error).message });
-    }
-    res.status(400).json({ ok: false, error: (error as Error).message });
-  }
-});
-
-openclaw.post("/api/openclaw/updateContact", async (req, res) => {
-  let run: FirebaseFirestore.DocumentReference | null = null;
-  try {
-    const productId = requireString(req.body?.productId, "productId", 2, 120);
-    const contactId = requireString(req.body?.contactId, "contactId", 2, 120);
-    const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
-    const patch = (req.body?.patch ?? {}) as Record<string, unknown>;
-    if (typeof patch.status === "string") {
-      patch.status = assertEnum(patch.status, CONTACT_STATUSES, "status");
-    }
-    if (typeof patch.kind === "string") {
-      patch.kind = assertEnum(patch.kind, CONTACT_KINDS, "kind");
-    }
-
-    run = await startAgentRun({ productId, agentId, action: "contact.update" });
-
-    const contactRef = db.doc(paths.contact(productId, contactId));
-    const beforeSnap = await contactRef.get();
-    if (!beforeSnap.exists) throw new Error("Contact not found");
-    const before = (beforeSnap.data() ?? {}) as Record<string, unknown>;
-    const changes = buildContactChanges(before, patch);
-
-    await contactRef.set({ ...patch, updatedAt: nowTs() }, { merge: true });
-
-    await writeActivity({
-      productId,
-      type: "contact.updated",
-      actorType: "agent",
-      actorId: agentId,
-      targetType: "contact",
-      targetId: contactId,
-      message: `OpenClaw updated contact: ${String((patch.name as string) || (before.name as string) || contactId)}`,
-    });
-
-    const changeSummary =
-      changes.length > 0
-        ? changes
-            .slice(0, 3)
-            .map((item) => `${item.label}: ${item.before} -> ${item.after}`)
-            .join(" • ")
-        : "No field changes";
-
-    await writeContactActivity({
-      productId,
-      contactId,
-      actorType: "agent",
-      actorId: agentId,
-      type: "contact.updated",
-      message: changeSummary,
-      changes,
-    });
-
-    await finishAgentRun(run, { status: "success", outputSummary: `contactId:${contactId}` });
-    res.json({ ok: true, data: { ok: true } });
-  } catch (error) {
-    if (run) {
-      await finishAgentRun(run, { status: "failed", errorMessage: (error as Error).message });
-    }
-    res.status(400).json({ ok: false, error: (error as Error).message });
-  }
-});
-
-openclaw.post("/api/openclaw/deleteContact", async (req, res) => {
-  let run: FirebaseFirestore.DocumentReference | null = null;
-  try {
-    const productId = requireString(req.body?.productId, "productId", 2, 120);
-    const contactId = requireString(req.body?.contactId, "contactId", 2, 120);
-    const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
-    run = await startAgentRun({ productId, agentId, action: "contact.delete" });
-
-    const contactRef = db.doc(paths.contact(productId, contactId));
-    const contactSnap = await contactRef.get();
-    if (!contactSnap.exists) throw new Error("Contact not found");
-    const contactData = contactSnap.data() ?? {};
-    const contactName = String(contactData.name ?? contactId);
-
-    const activitySnap = await db.collection(paths.contactActivity(productId, contactId)).get();
-    const batch = db.batch();
-    for (const docSnap of activitySnap.docs) {
-      batch.delete(docSnap.ref);
-    }
-    batch.delete(contactRef);
-    await batch.commit();
-
-    await writeActivity({
-      productId,
-      type: "contact.updated",
-      actorType: "agent",
-      actorId: agentId,
-      targetType: "contact",
-      targetId: contactId,
-      message: `OpenClaw deleted contact: ${contactName}`,
-    });
-
-    await finishAgentRun(run, { status: "success", outputSummary: `contactId:${contactId}` });
-    res.json({ ok: true, data: { ok: true } });
-  } catch (error) {
-    if (run) {
-      await finishAgentRun(run, { status: "failed", errorMessage: (error as Error).message });
-    }
     res.status(400).json({ ok: false, error: (error as Error).message });
   }
 });

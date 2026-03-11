@@ -10,4 +10,13 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
-node "$ROOT/scripts/dashboard-relay.mjs" poll "$@"
+NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
+if [ -z "$NODE_BIN" ] && [ -x "/opt/homebrew/bin/node" ]; then
+  NODE_BIN="/opt/homebrew/bin/node"
+fi
+if [ -z "$NODE_BIN" ]; then
+  echo "node binary not found on PATH" >&2
+  exit 1
+fi
+
+"$NODE_BIN" "$ROOT/scripts/dashboard-relay.mjs" poll "$@"
