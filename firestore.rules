@@ -1,0 +1,87 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner() {
+      return isSignedIn() && request.auth.uid == "kPpvp7Q9M7WVUHvrsBTE3HzCAjD2";
+    }
+
+    match /users/{userId} {
+      allow read, update: if isOwner() && request.auth.uid == userId;
+      allow create: if isOwner() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    match /products/{productId} {
+      allow read, write: if isOwner();
+
+      match /contacts/{contactId} {
+        allow read, write: if isOwner();
+
+        match /activity/{activityId} {
+          allow read, write: if isOwner();
+        }
+      }
+
+      match /tasks/{taskId} {
+        allow read, write: if isOwner();
+
+        match /comments/{commentId} {
+          allow read, write: if isOwner();
+        }
+      }
+
+      match /kpis/{kpiKey} {
+        allow read, write: if isOwner();
+
+        match /entries/{entryId} {
+          allow read, write: if isOwner();
+        }
+      }
+
+      match /activity/{activityId} {
+        allow read, write: if isOwner();
+      }
+
+      match /settings/{docId} {
+        allow read, write: if isOwner();
+      }
+    }
+
+    match /agent_runs/{runId} {
+      allow read, write: if isOwner();
+    }
+
+    match /openclaw_schedules/{docId} {
+      allow read, write: if isOwner();
+    }
+
+    match /openclaw_docs/{docId} {
+      allow read, write: if isOwner();
+    }
+
+    match /openclaw_agents/{docId} {
+      allow read, write: if isOwner();
+    }
+
+    match /openclaw_memory_entries/{docId} {
+      allow read, write: if isOwner();
+    }
+
+    match /openclaw_memory/{docId} {
+      allow read, write: if isOwner();
+    }
+
+    match /system/{docId} {
+      allow read, write: if isOwner();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

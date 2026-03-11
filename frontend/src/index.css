@@ -1,3 +1,76 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+body {
+  background: #090b10;
+  color: #e5e7eb;
+}
+
+button,
+[role="button"],
+a,
+summary,
+input[type="submit"],
+input[type="button"] {
+  cursor: pointer;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+}
+
+.mc-theme .bg-white {
+  background: #11151d !important;
+}
+
+.mc-theme .border-neutral-200,
+.mc-theme .border-neutral-100,
+.mc-theme .border-neutral-300 {
+  border-color: #242b3a !important;
+}
+
+.mc-theme .text-neutral-900 {
+  color: #f3f4f6 !important;
+}
+
+.mc-theme .text-neutral-700,
+.mc-theme .text-neutral-600,
+.mc-theme .text-neutral-500 {
+  color: #9ca3af !important;
+}
+
+.mc-theme input,
+.mc-theme select,
+.mc-theme textarea {
+  background: #0d1118 !important;
+  border-color: #2a3345 !important;
+  color: #e5e7eb !important;
+}
+
+.mc-theme input::placeholder,
+.mc-theme textarea::placeholder {
+  color: #6b7280 !important;
+}
+
+.mc-theme .bg-neutral-100 {
+  background: #1a2130 !important;
+}
+
+.mc-theme .hover\:bg-neutral-50:hover,
+.mc-theme .hover\:bg-neutral-100:hover {
+  background: #1a2130 !important;
+}
+
+.mc-theme .bg-blue-600 {
+  background: #4f46e5 !important;
+}
+
+.mc-theme .hover\:bg-blue-700:hover {
+  background: #4338ca !important;
+}
+
+.mc-theme .text-blue-600 {
+  color: #8b85ff !important;
+}
