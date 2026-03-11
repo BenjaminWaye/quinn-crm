@@ -194,7 +194,6 @@ async function cmdPollAndWork(args) {
     // Phase-1 auto-work: for each agent-owned task, ask missing info only once and avoid false re-blocking
     for (const t of tasks) {
       try {
-        const ts = `[${nowIso()}]`;
         const isAgent = (t.assignedType === 'agent') || String(t.createdBy || '').startsWith('quinn-');
         const hasOpenChecklist = Array.isArray(t.checklist) && t.checklist.some((c) => !c.done);
         if (!isAgent) continue;
@@ -212,7 +211,7 @@ async function cmdPollAndWork(args) {
             productId,
             agentId: DEFAULT_AGENT_ID,
             taskId: t.id,
-            body: `${ts} Auto-picked by heartbeat worker: moved to in_progress. Execution started now; next update will include concrete output artifacts.`,
+            body: 'Auto-picked by heartbeat worker: moved to in_progress. Execution started now; next update will include concrete output artifacts.',
           });
           continue;
         }
@@ -229,7 +228,7 @@ async function cmdPollAndWork(args) {
               productId,
               agentId: DEFAULT_AGENT_ID,
               taskId: t.id,
-              body: `${ts} Auto-advanced to review: task has no open checklist items and is ready for validation/approval.`,
+              body: 'Auto-advanced to review: task has no open checklist items and is ready for validation/approval.',
             });
           }
           continue;
@@ -298,7 +297,7 @@ async function cmdPollAndWork(args) {
             productId,
             agentId: DEFAULT_AGENT_ID,
             taskId: t.id,
-            body: `${ts} Execution started now. This task is actively being processed by the heartbeat worker; next update will include concrete output artifacts.`,
+            body: 'Execution started now. This task is actively being processed by the heartbeat worker; next update will include concrete output artifacts.',
           });
         }
 
@@ -314,7 +313,7 @@ async function cmdPollAndWork(args) {
             productId,
             agentId: DEFAULT_AGENT_ID,
             taskId: t.id,
-            body: `${ts} Auto-advanced to review: required inputs are present. Ready for validation or finalization.`,
+            body: 'Auto-advanced to review: required inputs are present. Ready for validation or finalization.',
           });
           continue;
         }
@@ -324,7 +323,7 @@ async function cmdPollAndWork(args) {
         if (!needsMissingInfoPrompt) continue;
 
         const commentLines = [
-          `${ts} I will complete remaining checklist items. Missing info needed to finish:`,
+          'I will complete remaining checklist items. Missing info needed to finish:',
           '1) Travel dates or flexibility (exact dates or +/- days/month).',
           '2) Preferred departure airport(s) (e.g., ARN) or acceptable alternatives.',
           '3) Cabin preference and max budget per person.',
