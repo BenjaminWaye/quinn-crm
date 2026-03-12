@@ -23,6 +23,7 @@ export function ProductOverviewPage() {
   const [repo, setRepo] = useState("");
   const [description, setDescription] = useState("");
   const [mission, setMission] = useState("");
+  const [discordChannelId, setDiscordChannelId] = useState("");
 
   useEffect(() => {
     const load = async () => {
@@ -48,6 +49,7 @@ export function ProductOverviewPage() {
         setRepo(nextProduct?.repo ?? "");
         setDescription(nextProduct?.description ?? "");
         setMission(nextProduct?.mission ?? "");
+        setDiscordChannelId(nextProduct?.discordChannelId ?? "");
         setKpis(nextKpis.slice(0, 6));
         setSnapshots(map);
         setTop(nextTop.slice(0, 5));
@@ -69,6 +71,7 @@ export function ProductOverviewPage() {
     repo: (product?.repo ?? "").trim(),
     description: (product?.description ?? "").trim(),
     mission: (product?.mission ?? "").trim(),
+    discordChannelId: (product?.discordChannelId ?? "").trim(),
   };
 
   const normalizedForm = {
@@ -77,6 +80,7 @@ export function ProductOverviewPage() {
     repo: repo.trim(),
     description: description.trim(),
     mission: mission.trim(),
+    discordChannelId: discordChannelId.trim(),
   };
 
   const hasChanges =
@@ -84,7 +88,8 @@ export function ProductOverviewPage() {
     normalizedCurrent.status !== normalizedForm.status ||
     normalizedCurrent.repo !== normalizedForm.repo ||
     normalizedCurrent.description !== normalizedForm.description ||
-    normalizedCurrent.mission !== normalizedForm.mission;
+    normalizedCurrent.mission !== normalizedForm.mission ||
+    normalizedCurrent.discordChannelId !== normalizedForm.discordChannelId;
 
   const onSaveProduct = async () => {
     if (!productId || !product || !normalizedForm.name || saving || !hasChanges) return;
@@ -142,6 +147,7 @@ export function ProductOverviewPage() {
             </div>
             <textarea className="w-full border border-neutral-300 rounded-lg px-3 py-2 min-h-[80px]" placeholder="Description" value={description} onChange={(event) => setDescription(event.target.value)} />
             <textarea className="w-full border border-neutral-300 rounded-lg px-3 py-2 min-h-[80px]" placeholder="Mission" value={mission} onChange={(event) => setMission(event.target.value)} />
+            <input className="w-full border border-neutral-300 rounded-lg px-3 py-2" placeholder="Discord channel id (optional)" value={discordChannelId} onChange={(event) => setDiscordChannelId(event.target.value)} />
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -173,6 +179,9 @@ export function ProductOverviewPage() {
               ) : (
                 "No repo linked."
               )}
+            </p>
+            <p className="text-sm text-neutral-700">
+              <span className="font-medium">Discord channel:</span> {product?.discordChannelId?.trim() || "(uses general default)"}
             </p>
           </>
         )}

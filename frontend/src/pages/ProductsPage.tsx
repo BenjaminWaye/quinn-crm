@@ -10,6 +10,7 @@ export function ProductsPage() {
   const [repo, setRepo] = useState("");
   const [description, setDescription] = useState("");
   const [mission, setMission] = useState("");
+  const [discordChannelId, setDiscordChannelId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -24,6 +25,7 @@ export function ProductsPage() {
         repo: repo.trim(),
         description: description.trim(),
         mission: mission.trim(),
+        discordChannelId: discordChannelId.trim(),
       });
       upsertProductLocal({
         id: result.data.productId,
@@ -32,11 +34,13 @@ export function ProductsPage() {
         repo: repo.trim(),
         description: description.trim(),
         mission: mission.trim(),
+        discordChannelId: discordChannelId.trim(),
       });
       setName("");
       setRepo("");
       setDescription("");
       setMission("");
+      setDiscordChannelId("");
       setOpen(false);
       void refresh();
     } catch (nextError) {
@@ -91,6 +95,7 @@ export function ProductsPage() {
               <input className="w-full border border-neutral-300 rounded-lg px-3 py-2" placeholder="Repo URL (optional)" value={repo} onChange={(e) => setRepo(e.target.value)} />
               <textarea className="w-full border border-neutral-300 rounded-lg px-3 py-2 min-h-[90px]" placeholder="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
               <textarea className="w-full border border-neutral-300 rounded-lg px-3 py-2 min-h-[90px]" placeholder="Mission (optional)" value={mission} onChange={(e) => setMission(e.target.value)} />
+              <input className="w-full border border-neutral-300 rounded-lg px-3 py-2" placeholder="Discord channel id for this product (optional)" value={discordChannelId} onChange={(e) => setDiscordChannelId(e.target.value)} />
               <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-60" disabled={busy || !name.trim()}>
                 {busy ? "Creating..." : "Create product"}
               </button>
