@@ -67,7 +67,7 @@ export function ProductTaskPage() {
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean),
-    discordChannelId: discordChannelId.trim() || null,
+    discordChannelId: discordChannelId.trim() || "",
     checklist: checklistText
       .split("\n")
       .map((row) => row.trim())
@@ -115,7 +115,7 @@ export function ProductTaskPage() {
         linkedContactIds: nextTask.linkedContactIds ?? [],
         linkedKpiKeys: nextTask.linkedKpiKeys ?? [],
         linkedDocIds: nextTask.linkedDocIds ?? [],
-        discordChannelId: (nextTask.discordChannelId ?? "").trim() || null,
+        discordChannelId: (nextTask.discordChannelId ?? "").trim() || "",
         checklist: (nextTask.checklist ?? []).map((item, index) => ({
           id: `cl_${index + 1}`,
           text: String(item.text ?? ""),
