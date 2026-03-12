@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { addTaskComment, deleteTask, getTask, listTaskComments, updateTask, type TaskCommentRecord, type TaskRecord } from "../lib/data";
 import { formatDateTime } from "../lib/time";
+import { renderCommentBodyHtml, renderCommentMeta } from "../lib/commentMarkdown";
 
 const TASK_TYPES = ["dev", "outreach", "content", "seo", "design", "research", "admin", "bug", "other"];
 const TASK_PRIORITIES = ["low", "medium", "high", "urgent"];
@@ -222,7 +223,6 @@ export function ProductTaskPage() {
       current
         ? {
             ...current,
-            ...patch,
             updatedAt: new Date().toISOString(),
           }
         : current,
@@ -411,10 +411,8 @@ export function ProductTaskPage() {
         <div className="p-4 border-b border-neutral-100 font-semibold">Comments</div>
         {comments.map((comment) => (
           <div key={comment.id} className="p-4 border-t border-neutral-100">
-            <p className="text-xs text-neutral-500 mb-1">
-              {comment.authorType} • {formatDateTime(comment.createdAt)}
-            </p>
-            <p>{comment.body}</p>
+            <p className="text-xs text-neutral-500 mb-1">{renderCommentMeta(comment.authorType, comment.createdAt)}</p>
+            <div className="text-sm leading-6 break-words" dangerouslySetInnerHTML={{ __html: renderCommentBodyHtml(comment.body) }} />
           </div>
         ))}
         {comments.length === 0 ? <p className="p-4 text-neutral-500">No comments yet.</p> : null}
