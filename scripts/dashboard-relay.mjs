@@ -195,7 +195,28 @@ async function cmdPollAndWork(args) {
     for (const t of tasks) {
       try {
         const isAgent = (t.assignedType === 'agent') || String(t.createdBy || '').startsWith('quinn-');
+        const isUnassigned = !t.assignedType && (t.assignedId == null);
         const hasOpenChecklist = Array.isArray(t.checklist) && t.checklist.some((c) => !c.done);
+
+        // NEW: If a task is unassigned and sitting in backlog/todo, auto-claim it for the agent.
+        // This prevents "nothing is happening" when Benjamin creates tasks but forgets to assign them.
+        if (isUnassigned && (t.status === 'backlog' || t.status === 'todo')) {
+          await postJson(UPDATE_TASK_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            patch: { assignedType: 'agent', assignedId: null, status: 'in_progress' },
+          });
+
+          await postJson(ADD_TASK_COMMENT_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            body: 'Auto-claimed by heartbeat worker: assigned to agent + moved to in_progress. Next update will include concrete output artifacts.',
+          });
+          continue;
+        }
+
         if (!isAgent) continue;
 
         // Auto-pickup: move agent backlog/todo tasks into in_progress and immediately mark execution started.
@@ -216,22 +237,36 @@ async function cmdPollAndWork(args) {
           continue;
         }
 
-        if (!hasOpenChecklist) {
-          if (t.status === 'in_progress') {
-            await postJson(UPDATE_TASK_URL, {
-              productId,
-              agentId: DEFAULT_AGENT_ID,
-              taskId: t.id,
-              patch: { status: 'review' },
-            });
-            await postJson(ADD_TASK_COMMENT_URL, {
-              productId,
-              agentId: DEFAULT_AGENT_ID,
-              taskId: t.id,
-              body: 'Auto-advanced to review: task has no open checklist items and is ready for validation/approval.',
-            });
-          }
+        // Repair: previous versions incorrectly auto-advanced tasks to review when no checklist existed.
+        // If we detect that pattern, move back to in_progress so work can actually happen.
+        const latestPreview = String(t.latestCommentPreview || '');
+        if (
+          t.status === 'review' &&
+          (
+            (!hasOpenChecklist && latestPreview.includes('Auto-advanced to review: task has no open checklist items')) ||
+            (hasOpenChecklist && latestPreview.includes('Auto-advanced to review: required inputs are present'))
+          )
+        ) {
+          await postJson(UPDATE_TASK_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            patch: { status: 'in_progress' },
+          });
+          await postJson(ADD_TASK_COMMENT_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            body: 'Fix applied: reverting an incorrect auto-advance to review. Task is back in in_progress so it can be completed with real output.',
+          });
           continue;
+        }
+
+        // IMPORTANT: Do NOT auto-advance tasks to review solely because there are no checklist items.
+        // That behavior created false "done/review" states without actual work output.
+        // We'll keep tasks in in_progress until a human or agent explicitly marks review/done.
+        if (!hasOpenChecklist) {
+          // nothing to do
         }
 
         const description = String(t.description || '').toLowerCase();
@@ -301,54 +336,12 @@ async function cmdPollAndWork(args) {
           });
         }
 
-        // If required inputs are present, auto-advance to review (prevents in_progress stalling).
-        if (t.status === 'in_progress' && hasProvidedAnswers) {
-          await postJson(UPDATE_TASK_URL, {
-            productId,
-            agentId: DEFAULT_AGENT_ID,
-            taskId: t.id,
-            patch: { status: 'review' },
-          });
-          await postJson(ADD_TASK_COMMENT_URL, {
-            productId,
-            agentId: DEFAULT_AGENT_ID,
-            taskId: t.id,
-            body: 'Auto-advanced to review: required inputs are present. Ready for validation or finalization.',
-          });
-          continue;
+        // IMPORTANT: Do not auto-advance to review based on heuristics (it created false positives).
+        // Also avoid posting generic "missing info" templates that don't match the task.
+        // If a task truly needs human input, the agent working the task should request it explicitly.
+        if (t.status === 'in_progress') {
+          // no-op
         }
-
-        // Only request missing info when task is actively in progress, answers are not present, and template is not already the latest comment.
-        const needsMissingInfoPrompt = t.status === 'in_progress' && !hasProvidedAnswers && !templateAlreadyPosted;
-        if (!needsMissingInfoPrompt) continue;
-
-        const commentLines = [
-          'I will complete remaining checklist items. Missing info needed to finish:',
-          '1) Travel dates or flexibility (exact dates or +/- days/month).',
-          '2) Preferred departure airport(s) (e.g., ARN) or acceptable alternatives.',
-          '3) Cabin preference and max budget per person.',
-          '4) Airline exclusions or loyalty preference.',
-          '5) Do you want me to book or only provide options/links?',
-          '',
-          'Please reply here so I can finish the research and complete the checklist. —Quinn',
-        ];
-
-        await postJson(ADD_TASK_COMMENT_URL, {
-          productId,
-          agentId: DEFAULT_AGENT_ID,
-          taskId: t.id,
-          body: commentLines.join('\n'),
-        });
-
-        await postJson(UPDATE_TASK_URL, {
-          productId,
-          agentId: DEFAULT_AGENT_ID,
-          taskId: t.id,
-          patch: {
-            status: 'blocked',
-            owner: 'Benjamin',
-          },
-        });
       } catch (err) {
         // non-fatal per-task
         console.error('auto-work error:', err.message || err);
