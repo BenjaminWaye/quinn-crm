@@ -38,6 +38,8 @@ export type TaskRecord = {
   linkedContactIds?: string[];
   linkedKpiKeys?: string[];
   linkedDocIds?: string[];
+  // Optional per-task notification routing override (Discord channel id).
+  discordChannelId?: string;
   checklist?: Array<{ id: string; text: string; done: boolean }>;
   updatedAt?: unknown;
   latestCommentPreview?: string;

@@ -33,6 +33,7 @@ export function ProductTaskPage() {
   const [linkedContactIdsText, setLinkedContactIdsText] = useState("");
   const [linkedKpiKeysText, setLinkedKpiKeysText] = useState("");
   const [linkedDocIdsText, setLinkedDocIdsText] = useState("");
+  const [discordChannelId, setDiscordChannelId] = useState("");
   const [blockedReason, setBlockedReason] = useState("");
   const [checklistText, setChecklistText] = useState("");
   const [initialSnapshot, setInitialSnapshot] = useState("");
@@ -66,6 +67,7 @@ export function ProductTaskPage() {
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean),
+    discordChannelId: discordChannelId.trim() || null,
     checklist: checklistText
       .split("\n")
       .map((row) => row.trim())
@@ -93,6 +95,7 @@ export function ProductTaskPage() {
     setLinkedContactIdsText((nextTask?.linkedContactIds ?? []).join(", "));
     setLinkedKpiKeysText((nextTask?.linkedKpiKeys ?? []).join(", "));
     setLinkedDocIdsText((nextTask?.linkedDocIds ?? []).join(", "));
+    setDiscordChannelId(nextTask?.discordChannelId ?? "");
     setBlockedReason(nextTask?.blockedReason ?? "");
     setChecklistText((nextTask?.checklist ?? []).map((item) => (item.done ? `[x] ${item.text}` : `[ ] ${item.text}`)).join("\n"));
     setComments(nextComments);
@@ -112,6 +115,7 @@ export function ProductTaskPage() {
         linkedContactIds: nextTask.linkedContactIds ?? [],
         linkedKpiKeys: nextTask.linkedKpiKeys ?? [],
         linkedDocIds: nextTask.linkedDocIds ?? [],
+        discordChannelId: (nextTask.discordChannelId ?? "").trim() || null,
         checklist: (nextTask.checklist ?? []).map((item, index) => ({
           id: `cl_${index + 1}`,
           text: String(item.text ?? ""),
@@ -139,6 +143,7 @@ export function ProductTaskPage() {
     linkedContactIdsText,
     linkedDocIdsText,
     linkedKpiKeysText,
+    discordChannelId,
     priority,
     status,
     title,
@@ -341,6 +346,7 @@ export function ProductTaskPage() {
           </select>
           <input className="border border-neutral-300 rounded-lg px-3 py-2" placeholder="Assigned ID" value={assignedId} onChange={(e) => setAssignedId(e.target.value)} />
           <input className="border border-neutral-300 rounded-lg px-3 py-2" placeholder="Blocked reason" value={blockedReason} onChange={(e) => setBlockedReason(e.target.value)} />
+          <input className="border border-neutral-300 rounded-lg px-3 py-2 md:col-span-2" placeholder="Discord channel id override (optional)" value={discordChannelId} onChange={(e) => setDiscordChannelId(e.target.value)} />
         </div>
         <textarea className="w-full border border-neutral-300 rounded-lg px-3 py-2 min-h-[100px]" placeholder="Description" value={description} onChange={(e) => setDescription(e.target.value)} />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -378,6 +384,7 @@ export function ProductTaskPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-neutral-700">
           <p>taskId: {task.id ?? taskId}</p>
           <p>productId: {productId}</p>
+          <p>discordChannelId: {task.discordChannelId?.trim() || "-"}</p>
           <p>source: {task.source ?? "-"}</p>
           <p>commentCount: {task.commentCount ?? 0}</p>
           <p>latestCommentPreview: {task.latestCommentPreview || "-"}</p>
