@@ -355,6 +355,7 @@ async function createTaskInternal(input: {
   linkedContactIds?: string[];
   linkedKpiKeys?: string[];
   linkedDocIds?: string[];
+  discordChannelId?: string;
   checklist?: Array<{ text: string }>;
   source?: "manual" | "openclaw" | "automation";
   blockedReason?: string;
@@ -375,6 +376,7 @@ async function createTaskInternal(input: {
     linkedContactIds: Array.isArray(input.linkedContactIds) ? input.linkedContactIds : [],
     linkedKpiKeys: Array.isArray(input.linkedKpiKeys) ? input.linkedKpiKeys : [],
     linkedDocIds: Array.isArray(input.linkedDocIds) ? input.linkedDocIds : [],
+    discordChannelId: input.discordChannelId?.trim() || "",
     checklist: (input.checklist ?? []).map((item, index) => ({
       id: `item_${index + 1}`,
       text: String(item.text ?? ""),
@@ -766,6 +768,7 @@ export const createTask = eu.https.onCall(async (data, context) => {
       linkedContactIds: data?.linkedContactIds,
       linkedKpiKeys: data?.linkedKpiKeys,
       linkedDocIds: data?.linkedDocIds,
+      discordChannelId: data?.discordChannelId,
       checklist: data?.checklist,
       source: data?.source,
       blockedReason: data?.blockedReason,
@@ -1129,6 +1132,7 @@ openclaw.post("/api/openclaw/createTask", async (req, res) => {
       linkedContactIds: req.body?.linkedContactIds,
       linkedKpiKeys: req.body?.linkedKpiKeys,
       linkedDocIds: req.body?.linkedDocIds,
+      discordChannelId: req.body?.discordChannelId,
       checklist: req.body?.checklist,
       source: "openclaw",
       blockedReason: req.body?.blockedReason,
