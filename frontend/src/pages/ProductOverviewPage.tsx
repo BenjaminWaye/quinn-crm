@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getProduct, listActivity, listBlockedTasks, listKeyContacts, listKpiEntries, listKpis, listTopPriorities, type ActivityRecord, type ContactRecord, type KpiRecord, type ProductRecord, type TaskRecord } from "../lib/data";
+import { getProduct, listActivity, listBlockedTasks, listKeyContacts, listKpiEntries, listKpis, listTopPriorities, updateProduct, type ActivityRecord, type ContactRecord, type KpiRecord, type ProductRecord, type TaskRecord } from "../lib/data";
 import { calculateKpiSnapshot } from "../features/kpi/kpi.calculations";
 import { formatDateTime } from "../lib/time";
 
@@ -15,6 +15,14 @@ export function ProductOverviewPage() {
   const [blockers, setBlockers] = useState<TaskRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [name, setName] = useState("");
+  const [status, setStatus] = useState("active");
+  const [repo, setRepo] = useState("");
+  const [description, setDescription] = useState("");
+  const [mission, setMission] = useState("");
 
   useEffect(() => {
     const load = async () => {
@@ -35,6 +43,11 @@ export function ProductOverviewPage() {
           map[kpi.key] = calculateKpiSnapshot(kpi, await listKpiEntries(productId, kpi.key));
         }
         setProduct(nextProduct);
+        setName(nextProduct?.name ?? "");
+        setStatus(nextProduct?.status ?? "active");
+        setRepo(nextProduct?.repo ?? "");
+        setDescription(nextProduct?.description ?? "");
+        setMission(nextProduct?.mission ?? "");
         setKpis(nextKpis.slice(0, 6));
         setSnapshots(map);
         setTop(nextTop.slice(0, 5));
@@ -50,25 +63,119 @@ export function ProductOverviewPage() {
     void load();
   }, [productId]);
 
+  const normalizedCurrent = {
+    name: (product?.name ?? "").trim(),
+    status: product?.status ?? "active",
+    repo: (product?.repo ?? "").trim(),
+    description: (product?.description ?? "").trim(),
+    mission: (product?.mission ?? "").trim(),
+  };
+
+  const normalizedForm = {
+    name: name.trim(),
+    status,
+    repo: repo.trim(),
+    description: description.trim(),
+    mission: mission.trim(),
+  };
+
+  const hasChanges =
+    normalizedCurrent.name !== normalizedForm.name ||
+    normalizedCurrent.status !== normalizedForm.status ||
+    normalizedCurrent.repo !== normalizedForm.repo ||
+    normalizedCurrent.description !== normalizedForm.description ||
+    normalizedCurrent.mission !== normalizedForm.mission;
+
+  const onSaveProduct = async () => {
+    if (!productId || !product || !normalizedForm.name || saving || !hasChanges) return;
+    try {
+      setSaving(true);
+      setEditError("");
+      setProduct((current) =>
+        current
+          ? {
+              ...current,
+              ...normalizedForm,
+            }
+          : current,
+      );
+      await updateProduct({
+        productId,
+        patch: normalizedForm,
+      });
+      setEditing(false);
+    } catch (nextError) {
+      setEditError((nextError as Error)?.message || "Failed to update product");
+      setProduct(product);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="p-4 lg:p-8 pb-20 lg:pb-8 max-w-7xl mx-auto space-y-6">
       {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm">{error}</div>}
       <section className="bg-white border border-neutral-200 rounded-lg p-4 space-y-2">
-        <h1 className="text-2xl font-bold">{product?.name ?? "Product overview"}</h1>
-        <p className="text-sm text-neutral-700">{product?.description?.trim() || "No description yet."}</p>
-        <p className="text-sm text-neutral-700">
-          <span className="font-medium">Mission:</span> {product?.mission?.trim() || "No mission set."}
-        </p>
-        <p className="text-sm text-neutral-700">
-          <span className="font-medium">Repo:</span>{" "}
-          {product?.repo?.trim() ? (
-            <a className="text-blue-600 hover:underline break-all" href={product.repo} target="_blank" rel="noreferrer">
-              {product.repo}
-            </a>
-          ) : (
-            "No repo linked."
-          )}
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-2xl font-bold">{product?.name ?? "Product overview"}</h1>
+          <button
+            type="button"
+            onClick={() => {
+              setEditError("");
+              setEditing((current) => !current);
+            }}
+            className="px-3 py-1.5 rounded-lg border border-neutral-300 text-sm"
+          >
+            {editing ? "Close editor" : "Edit product"}
+          </button>
+        </div>
+        {editing ? (
+          <div className="space-y-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <input className="border border-neutral-300 rounded-lg px-3 py-2" placeholder="Name" value={name} onChange={(event) => setName(event.target.value)} />
+              <select className="border border-neutral-300 rounded-lg px-3 py-2" value={status} onChange={(event) => setStatus(event.target.value)}>
+                <option value="active">active</option>
+                <option value="paused">paused</option>
+                <option value="archived">archived</option>
+              </select>
+              <input className="border border-neutral-300 rounded-lg px-3 py-2 md:col-span-2" placeholder="Repo URL" value={repo} onChange={(event) => setRepo(event.target.value)} />
+            </div>
+            <textarea className="w-full border border-neutral-300 rounded-lg px-3 py-2 min-h-[80px]" placeholder="Description" value={description} onChange={(event) => setDescription(event.target.value)} />
+            <textarea className="w-full border border-neutral-300 rounded-lg px-3 py-2 min-h-[80px]" placeholder="Mission" value={mission} onChange={(event) => setMission(event.target.value)} />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void onSaveProduct()}
+                disabled={saving || !normalizedForm.name || !hasChanges}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-60"
+              >
+                {saving ? "Saving..." : "Save product"}
+              </button>
+              {!hasChanges && <p className="text-xs text-neutral-500">No changes to save.</p>}
+            </div>
+            {editError && <p className="text-sm text-red-600">{editError}</p>}
+          </div>
+        ) : (
+          <>
+            <p className="text-sm text-neutral-700">{product?.description?.trim() || "No description yet."}</p>
+            <p className="text-sm text-neutral-700">
+              <span className="font-medium">Mission:</span> {product?.mission?.trim() || "No mission set."}
+            </p>
+            <p className="text-sm text-neutral-700">
+              <span className="font-medium">Status:</span> {product?.status ?? "active"}
+            </p>
+            <p className="text-sm text-neutral-700">
+              <span className="font-medium">Repo:</span>{" "}
+              {product?.repo?.trim() ? (
+                <a className="text-blue-600 hover:underline break-all" href={product.repo} target="_blank" rel="noreferrer">
+                  {product.repo}
+                </a>
+              ) : (
+                "No repo linked."
+              )}
+            </p>
+          </>
+        )}
       </section>
       {blockers.length > 0 && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
