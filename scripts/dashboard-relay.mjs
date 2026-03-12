@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync, statSync, readdirSync } from 'node:fs';
+import { readFileSync, statSync, readdirSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { resolve, basename, extname } from 'node:path';
 
 /**
@@ -42,6 +43,7 @@ const UPDATE_TASK_URL = env.UPDATE_TASK_URL || `${API_BASE_URL}/openclaw/updateT
 const ADD_TASK_COMMENT_URL = env.ADD_TASK_COMMENT_URL || `${API_BASE_URL}/openclaw/addTaskComment`;
 const ADD_ACTIVITY_NOTE_URL = env.ADD_ACTIVITY_NOTE_URL || `${API_BASE_URL}/openclaw/addActivityNote`;
 const LIST_TASK_COMMENTS_URL = env.LIST_TASK_COMMENTS_URL || `${API_BASE_URL}/openclaw/listTaskComments`;
+const SYNC_SCHEDULES_URL = env.SYNC_SCHEDULES_URL || `${API_BASE_URL}/openclaw/syncSchedules`;
 const DEFAULT_AGENT_ID = env.DEFAULT_AGENT_ID || 'quinn-main';
 
 function parseArgs(argv) {
@@ -194,7 +196,43 @@ async function cmdPollAndWork(args) {
       try {
         const isAgent = (t.assignedType === 'agent') || String(t.createdBy || '').startsWith('quinn-');
         const hasOpenChecklist = Array.isArray(t.checklist) && t.checklist.some((c) => !c.done);
-        if (!isAgent || !hasOpenChecklist) continue;
+        if (!isAgent) continue;
+
+        // Auto-pickup: move agent backlog/todo tasks into in_progress and immediately mark execution started.
+        if ((t.status === 'backlog' || t.status === 'todo')) {
+          await postJson(UPDATE_TASK_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            patch: { status: 'in_progress' },
+          });
+
+          await postJson(ADD_TASK_COMMENT_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            body: 'Auto-picked by heartbeat worker: moved to in_progress. Execution started now; next update will include concrete output artifacts.',
+          });
+          continue;
+        }
+
+        if (!hasOpenChecklist) {
+          if (t.status === 'in_progress') {
+            await postJson(UPDATE_TASK_URL, {
+              productId,
+              agentId: DEFAULT_AGENT_ID,
+              taskId: t.id,
+              patch: { status: 'review' },
+            });
+            await postJson(ADD_TASK_COMMENT_URL, {
+              productId,
+              agentId: DEFAULT_AGENT_ID,
+              taskId: t.id,
+              body: 'Auto-advanced to review: task has no open checklist items and is ready for validation/approval.',
+            });
+          }
+          continue;
+        }
 
         const description = String(t.description || '').toLowerCase();
         const latest = String(t.latestCommentPreview || '').toLowerCase();
@@ -239,6 +277,7 @@ async function cmdPollAndWork(args) {
         const hasDescriptionSupplement = description.includes('\n') && description.split('\n').length > 1;
 
         const hasProvidedAnswers = hasHumanAfterTemplate || hasDescriptionSupplement;
+        const executionStartedAlready = allCommentText.includes('execution started now') || allCommentText.includes('auto-picked by heartbeat worker: moved to in_progress. execution started');
 
         // If answers are present and task is blocked, move back to in_progress and keep it with agent flow.
         if (hasProvidedAnswers && t.status === 'blocked') {
@@ -249,6 +288,32 @@ async function cmdPollAndWork(args) {
             patch: {
               status: 'in_progress',
             },
+          });
+        }
+
+        // Ensure in_progress tasks have an explicit execution-start signal once.
+        if (t.status === 'in_progress' && !executionStartedAlready) {
+          await postJson(ADD_TASK_COMMENT_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            body: 'Execution started now. This task is actively being processed by the heartbeat worker; next update will include concrete output artifacts.',
+          });
+        }
+
+        // If required inputs are present, auto-advance to review (prevents in_progress stalling).
+        if (t.status === 'in_progress' && hasProvidedAnswers) {
+          await postJson(UPDATE_TASK_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            patch: { status: 'review' },
+          });
+          await postJson(ADD_TASK_COMMENT_URL, {
+            productId,
+            agentId: DEFAULT_AGENT_ID,
+            taskId: t.id,
+            body: 'Auto-advanced to review: required inputs are present. Ready for validation or finalization.',
           });
           continue;
         }
@@ -535,12 +600,124 @@ async function cmdSyncMemory(args) {
   console.log(JSON.stringify({ ok: true, action: 'sync-memory', longTerm: !!longTerm, entries: entries.length, response: data }, null, 2));
 }
 
+async function cmdSyncSchedules(args) {
+  const agentId = args.agentId || DEFAULT_AGENT_ID;
+  const timezone = args.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+  const parseCronWeekSlots = (expr, label) => {
+    const parts = String(expr || '').trim().split(/\s+/);
+    if (parts.length < 5) return [];
+    const [minRaw, hourRaw, , , dowRaw] = parts;
+    if (!/^\d{1,2}$/.test(minRaw) || !/^\d{1,2}$/.test(hourRaw)) return [];
+    const hh = String(Number(hourRaw)).padStart(2, '0');
+    const mm = String(Number(minRaw)).padStart(2, '0');
+    const time = `${hh}:${mm}`;
+
+    const parseDow = (raw) => {
+      const s = String(raw || '*').trim();
+      if (s === '*') return [0, 1, 2, 3, 4, 5, 6];
+      const out = new Set();
+      for (const token of s.split(',')) {
+        const t = token.trim();
+        if (!t) continue;
+        if (t.includes('-')) {
+          const [aRaw, bRaw] = t.split('-');
+          const a = Number(aRaw);
+          const b = Number(bRaw);
+          if (Number.isInteger(a) && Number.isInteger(b)) {
+            for (let d = a; d <= b; d++) out.add(d === 7 ? 0 : d);
+          }
+        } else {
+          const d = Number(t);
+          if (Number.isInteger(d)) out.add(d === 7 ? 0 : d);
+        }
+      }
+      return [...out].filter((d) => d >= 0 && d <= 6).sort((a, b) => a - b);
+    };
+
+    return parseDow(dowRaw).map((day) => ({ day, time, label }));
+  };
+
+  // Optional mapping file: config/schedule-product-map.json => { "jobId": "productId" }
+  let productMap = {};
+  try {
+    const mapPath = resolve(process.cwd(), args.mapPath || 'config/schedule-product-map.json');
+    if (existsSync(mapPath)) {
+      productMap = JSON.parse(readFileSync(mapPath, 'utf8')) || {};
+    }
+  } catch {
+    productMap = {};
+  }
+
+  // Pull local cron jobs from OpenClaw CLI
+  const raw = execSync('openclaw cron list --all --json', { encoding: 'utf8' });
+  const parsed = JSON.parse(raw);
+  const jobsRaw = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.jobs) ? parsed.jobs : Array.isArray(parsed?.data) ? parsed.data : [];
+
+  const jobs = jobsRaw.map((j) => {
+    const schedule = j?.schedule || {};
+    const scheduleType = schedule?.kind || 'other';
+    const expression = scheduleType === 'cron'
+      ? String(schedule?.expr || '')
+      : scheduleType === 'every'
+        ? `every:${Number(schedule?.everyMs || 0)}ms`
+        : scheduleType === 'at'
+          ? `at:${String(schedule?.at || '')}`
+          : '';
+
+    const name = String(j?.name || j?.id || j?.jobId || 'Unnamed schedule');
+    const nextRuns = j?.state?.nextRunAtMs ? [new Date(Number(j.state.nextRunAtMs)).toISOString()] : [];
+
+    const jobId = String(j?.id || j?.jobId || '');
+    const tagMatch = name.match(/\[\s*product\s*:\s*([a-zA-Z0-9_-]+)\s*\]/i);
+    const productId = (productMap && productMap[jobId]) || (tagMatch ? String(tagMatch[1]).trim() : null);
+
+    let weekSlots = [];
+    if (scheduleType === 'cron') {
+      weekSlots = parseCronWeekSlots(String(schedule?.expr || ''), name);
+    } else if (nextRuns.length > 0) {
+      // Fallback visualization: place non-cron jobs at their next-run day/time
+      const dt = new Date(nextRuns[0]);
+      if (!Number.isNaN(dt.getTime())) {
+        const day = dt.getUTCDay();
+        const hh = String(dt.getUTCHours()).padStart(2, '0');
+        const mm = String(dt.getUTCMinutes()).padStart(2, '0');
+        weekSlots = [{ day, time: `${hh}:${mm}`, label: name }];
+      }
+    }
+
+    return {
+      id: jobId,
+      name,
+      enabled: j?.enabled !== false,
+      alwaysRunning: false,
+      color: '',
+      productId: productId || null,
+      scheduleType,
+      expression,
+      tags: [],
+      weekSlots,
+      nextRuns,
+      sourceUpdatedAt: new Date(Number(j?.updatedAtMs || Date.now())).toISOString(),
+    };
+  }).filter((j) => j.id);
+
+  const data = await postJson(SYNC_SCHEDULES_URL, {
+    agentId,
+    timezone,
+    generatedAt: nowIso(),
+    jobs,
+  });
+
+  console.log(JSON.stringify({ ok: true, action: 'sync-schedules', sent: jobs.length, response: data }, null, 2));
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0];
 
   if (!cmd || ['help', '-h', '--help'].includes(cmd)) {
-    console.log('Usage: poll | poll-and-work | create | update | comment | list-contacts | sync-docs | sync-workspace-docs | sync-memory (see file header for examples)');
+    console.log('Usage: poll | poll-and-work | create | update | comment | list-contacts | sync-docs | sync-workspace-docs | sync-memory | sync-schedules (see file header for examples)');
     return;
   }
 
@@ -553,6 +730,7 @@ async function main() {
   if (cmd === 'sync-docs') return cmdSyncDocs(args);
   if (cmd === 'sync-workspace-docs') return cmdSyncWorkspaceDocs(args);
   if (cmd === 'sync-memory') return cmdSyncMemory(args);
+  if (cmd === 'sync-schedules') return cmdSyncSchedules(args);
 
   throw new Error(`Unknown command: ${cmd}`);
 }

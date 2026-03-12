@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { listOpenClawSchedules, type OpenClawScheduleJob, type OpenClawScheduleSlot } from "../lib/data";
+import { listOpenClawSchedules, listProducts, updateOpenClawScheduleProduct, type OpenClawScheduleJob, type OpenClawScheduleSlot, type ProductRecord } from "../lib/data";
 import { formatDateTime } from "../lib/time";
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -39,6 +39,7 @@ function normalizeSlots(job: OpenClawScheduleJob): OpenClawScheduleSlot[] {
 export function CalendarPage() {
   const { productId } = useParams();
   const [jobs, setJobs] = useState<OpenClawScheduleJob[]>([]);
+  const [products, setProducts] = useState<ProductRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -47,7 +48,9 @@ export function CalendarPage() {
       try {
         setLoading(true);
         setError("");
-        setJobs(await listOpenClawSchedules());
+        const [nextJobs, nextProducts] = await Promise.all([listOpenClawSchedules(), listProducts()]);
+        setJobs(nextJobs);
+        setProducts(nextProducts);
       } catch (nextError) {
         setError((nextError as Error)?.message || "Failed to load schedules");
       } finally {
@@ -61,6 +64,15 @@ export function CalendarPage() {
     if (!productId) return jobs;
     return jobs.filter((job) => job.productId === productId);
   }, [jobs, productId]);
+
+  const assignProduct = async (job: OpenClawScheduleJob, nextProductId: string) => {
+    try {
+      await updateOpenClawScheduleProduct(job, nextProductId || null);
+      setJobs((prev) => prev.map((item) => (item.id === job.id && item.agentId === job.agentId ? { ...item, productId: nextProductId || null } : item)));
+    } catch (e) {
+      setError((e as Error)?.message || "Failed to update schedule product assignment");
+    }
+  };
 
   const alwaysRunning = useMemo(() => scopedJobs.filter((job) => job.alwaysRunning && job.enabled), [scopedJobs]);
   const columns = useMemo(() => {
@@ -123,6 +135,34 @@ export function CalendarPage() {
               {productId ? "No always-running jobs for this product" : "No always-running jobs"}
             </span>
           )}
+        </div>
+      </section>
+
+      <section className="bg-[#0f141f] border border-[#232b3a] rounded-lg p-4">
+        <h2 className="font-semibold text-neutral-100 mb-3">Schedule product assignment</h2>
+        <div className="space-y-2">
+          {scopedJobs.map((job) => (
+            <div key={`${job.agentId}:${job.id}`} className="flex flex-wrap items-center justify-between gap-3 rounded border border-[#2a3345] p-2.5">
+              <div className="text-sm">
+                <p className="font-medium text-neutral-100">{job.name}</p>
+                <p className="text-xs text-neutral-400">{job.id} • {job.agentId}</p>
+              </div>
+              <label className="text-xs text-neutral-300 flex items-center gap-2">
+                Product
+                <select
+                  value={job.productId ?? ""}
+                  onChange={(e) => void assignProduct(job, e.target.value)}
+                  className="bg-[#0b0f17] border border-[#2a3345] rounded px-2 py-1 text-sm text-neutral-100"
+                >
+                  <option value="">(global)</option>
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ))}
+          {!loading && scopedJobs.length === 0 && <p className="text-sm text-neutral-400">No schedules available</p>}
         </div>
       </section>
 

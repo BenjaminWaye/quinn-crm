@@ -402,7 +402,9 @@ export function ProductTaskPage() {
         <div className="p-4 border-b border-neutral-100 font-semibold">Comments</div>
         {comments.map((comment) => (
           <div key={comment.id} className="p-4 border-t border-neutral-100">
-            <p className="text-xs text-neutral-500 mb-1">{comment.authorType}</p>
+            <p className="text-xs text-neutral-500 mb-1">
+              {comment.authorType} • {formatDateTime(comment.createdAt)}
+            </p>
             <p>{comment.body}</p>
           </div>
         ))}

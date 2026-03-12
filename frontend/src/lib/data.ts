@@ -7,6 +7,7 @@ import {
   orderBy,
   query,
   where,
+  updateDoc,
   type QueryConstraint,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
@@ -185,6 +186,7 @@ export type OpenClawScheduleSlot = {
 
 export type OpenClawScheduleJob = {
   id: string;
+  docId?: string;
   name: string;
   agentId: string;
   enabled: boolean;
@@ -684,6 +686,21 @@ export async function listOpenClawSchedules(): Promise<OpenClawScheduleJob[]> {
     return [...loadMockDb().schedules].sort((a, b) => a.name.localeCompare(b.name));
   }
   return readCollection<OpenClawScheduleJob>("openclaw_schedules", [orderBy("name", "asc")]);
+}
+
+export async function updateOpenClawScheduleProduct(job: OpenClawScheduleJob, productId: string | null): Promise<void> {
+  if (SKIP_AUTH) {
+    const dbMock = loadMockDb();
+    const idx = dbMock.schedules.findIndex((s) => s.id === job.id && s.agentId === job.agentId);
+    if (idx >= 0) dbMock.schedules[idx].productId = productId;
+    saveMockDb(dbMock);
+    return;
+  }
+
+  const docId = job.docId || `${job.agentId}__${job.id}`;
+  await updateDoc(doc(db, "openclaw_schedules", docId), {
+    productId: productId || null,
+  });
 }
 
 export async function listOpenClawMemoryEntries(): Promise<OpenClawMemoryEntry[]> {
