@@ -20,6 +20,8 @@ export type ProductRecord = {
   repo?: string;
   description?: string;
   mission?: string;
+  // Optional notification routing (Discord channel id). Empty/undefined => fall back to general channel.
+  discordChannelId?: string;
   order?: number;
   ownerId?: string;
 };
@@ -761,6 +763,7 @@ export async function createProduct(input: {
   repo?: string;
   description?: string;
   mission?: string;
+  discordChannelId?: string;
   color?: string;
   icon?: string;
 }) {
@@ -777,6 +780,7 @@ export async function createProduct(input: {
       repo: input.repo?.trim() || "",
       description: input.description?.trim() || "",
       mission: input.mission?.trim() || "",
+      discordChannelId: input.discordChannelId?.trim() || "",
       order: dbState.products.length,
     });
     dbState.contactsByProduct[id] = [];
@@ -799,6 +803,7 @@ export async function updateProduct(input: {
     repo: string;
     description: string;
     mission: string;
+    discordChannelId: string;
     color: string;
     icon: string;
   }>;

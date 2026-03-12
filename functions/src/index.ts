@@ -561,6 +561,8 @@ export const createProduct = eu.https.onCall(async (data, context) => {
       repo: data?.repo ? String(data.repo).trim() : "",
       description: data?.description ?? "",
       mission: data?.mission ?? "",
+      // Optional notification routing (Discord channel id). Leave empty to default to general.
+      discordChannelId: data?.discordChannelId ? String(data.discordChannelId).trim() : "",
       status: "active",
       order: nextOrder,
       color: data?.color ?? "",
