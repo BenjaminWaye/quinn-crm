@@ -233,6 +233,7 @@ export function DocsPage() {
   const [docs, setDocs] = useState<OpenClawDoc[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [mobileDocOpen, setMobileDocOpen] = useState(false);
+  const [shareMessage, setShareMessage] = useState("");
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [loading, setLoading] = useState(true);
@@ -275,6 +276,61 @@ export function DocsPage() {
   const onSelectDoc = (docId: string) => {
     setSelectedId(docId);
     setMobileDocOpen(true);
+  };
+
+  const clearShareMessageSoon = () => {
+    window.setTimeout(() => setShareMessage(""), 2500);
+  };
+
+  const docSharePayload = useMemo(() => {
+    if (!selected) return "";
+    const linked = (selected.linkedTasks ?? []).map((task) => `${task.productId}:${task.taskId}`);
+    return JSON.stringify(
+      {
+        docId: selected.id,
+        name: selected.name,
+        type: inferDocType(selected),
+        sourceFile: selected.sourceFile ?? "",
+        linkedTaskKeys: linked,
+      },
+      null,
+      2,
+    );
+  }, [selected]);
+
+  const onCopyDocId = async () => {
+    if (!selected) return;
+    try {
+      await navigator.clipboard.writeText(selected.id);
+      setShareMessage("Document ID copied");
+      clearShareMessageSoon();
+    } catch (nextError) {
+      console.error("Failed to copy document id", nextError);
+      setShareMessage("Could not copy document ID");
+      clearShareMessageSoon();
+    }
+  };
+
+  const onShareDoc = async () => {
+    if (!selected) return;
+    const shareText = `Document reference\ndocId=${selected.id}\n\n${docSharePayload}`;
+    try {
+      if (typeof navigator.share === "function") {
+        await navigator.share({
+          title: `OpenClaw document reference: ${selected.name}`,
+          text: shareText,
+        });
+        setShareMessage("Shared with OpenClaw reference");
+      } else {
+        await navigator.clipboard.writeText(shareText);
+        setShareMessage("OpenClaw document payload copied");
+      }
+      clearShareMessageSoon();
+    } catch (nextError) {
+      console.error("Failed to share document", nextError);
+      setShareMessage("Could not share document reference");
+      clearShareMessageSoon();
+    }
   };
 
   return (
@@ -332,11 +388,34 @@ export function DocsPage() {
 
         <section className="hidden xl:flex bg-[#0f141f] border border-[#232b3a] rounded-lg overflow-hidden min-h-[620px] flex-col">
           <header className="px-4 py-3 border-b border-[#232b3a]">
-            <h1 className="text-xl font-semibold">{selected?.name ?? "Document"}</h1>
-            <p className="text-xs text-neutral-400 mt-1">
-              {selected ? inferDocType(selected) : "unknown"} • Modified {formatDateTime(selected?.modifiedAt)}
-              {selected?.sourceFile ? ` • ${selected.sourceFile}` : ""}
-            </p>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h1 className="text-xl font-semibold truncate">{selected?.name ?? "Document"}</h1>
+                <p className="text-xs text-neutral-400 mt-1">
+                  {selected ? inferDocType(selected) : "unknown"} • Modified {formatDateTime(selected?.modifiedAt)}
+                  {selected?.sourceFile ? ` • ${selected.sourceFile}` : ""}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void onCopyDocId()}
+                  disabled={!selected}
+                  className="px-3 py-1.5 rounded-md border border-[#2a3345] text-xs text-neutral-200 hover:bg-[#161c27] disabled:opacity-60"
+                >
+                  Copy ID
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onShareDoc()}
+                  disabled={!selected}
+                  className="px-3 py-1.5 rounded-md border border-[#2a3345] text-xs text-neutral-200 hover:bg-[#161c27] disabled:opacity-60"
+                >
+                  Share with OpenClaw
+                </button>
+              </div>
+            </div>
+            {shareMessage ? <p className="text-xs text-neutral-400 mt-2">{shareMessage}</p> : null}
           </header>
 
           <div className="px-4 py-3 border-b border-[#232b3a]">
@@ -379,14 +458,25 @@ export function DocsPage() {
               {selected ? inferDocType(selected) : "unknown"} • Modified {formatDateTime(selected?.modifiedAt)}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setMobileDocOpen(false)}
-            className="shrink-0 rounded-md border border-[#2a3345] px-3 py-1.5 text-sm text-neutral-200 hover:bg-[#161c27]"
-          >
-            Back
-          </button>
+          <div className="shrink-0 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void onShareDoc()}
+              disabled={!selected}
+              className="rounded-md border border-[#2a3345] px-2.5 py-1.5 text-xs text-neutral-200 hover:bg-[#161c27] disabled:opacity-60"
+            >
+              Share
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileDocOpen(false)}
+              className="rounded-md border border-[#2a3345] px-3 py-1.5 text-sm text-neutral-200 hover:bg-[#161c27]"
+            >
+              Back
+            </button>
+          </div>
         </header>
+        {shareMessage ? <p className="px-4 py-2 text-xs text-neutral-400 border-b border-[#232b3a]">{shareMessage}</p> : null}
 
         <div className="px-4 py-3 border-b border-[#232b3a]">
           <p className="text-xs uppercase tracking-wide text-neutral-500 font-semibold mb-2">Linked tasks</p>
