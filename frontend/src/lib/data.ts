@@ -24,6 +24,7 @@ export type ProductRecord = {
   discordChannelId?: string;
   order?: number;
   ownerId?: string;
+  lastActivityAt?: unknown;
 };
 
 export type TaskRecord = {
@@ -702,7 +703,8 @@ export async function updateOpenClawScheduleProduct(job: OpenClawScheduleJob, pr
   }
 
   const docId = job.docId || `${job.agentId}__${job.id}`;
-  await updateDoc(doc(db, "openclaw_schedules", docId), {
+  const dbRef = ensureDb();
+  await updateDoc(doc(dbRef, "openclaw_schedules", docId), {
     productId: productId || null,
   });
 }
