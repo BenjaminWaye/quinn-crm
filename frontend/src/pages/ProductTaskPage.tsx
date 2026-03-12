@@ -154,8 +154,7 @@ export function ProductTaskPage() {
     event?.preventDefault();
     if (!productId || !taskId || !body.trim() || savingComment) return;
     const shouldOfferReassignPrompt =
-      task?.status === "done" ||
-      (task?.assignedType === "human" && (task?.status === "blocked" || task?.status === "review"));
+      task?.status === "blocked" || task?.status === "review" || task?.status === "done";
     const trimmedBody = body.trim();
     const optimisticComment: TaskCommentRecord = {
       id: `tmp_${crypto.randomUUID()}`,
