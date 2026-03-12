@@ -148,6 +148,8 @@ export function ProductTaskPage() {
   const onComment = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!productId || !taskId || !body.trim() || savingComment) return;
+    const shouldOfferReassignPrompt =
+      task?.assignedType === "human" && (task?.status === "blocked" || task?.status === "review");
     const trimmedBody = body.trim();
     const optimisticComment: TaskCommentRecord = {
       id: `tmp_${crypto.randomUUID()}`,
@@ -172,9 +174,9 @@ export function ProductTaskPage() {
       );
       setBody("");
       await addTaskComment({ productId, taskId, body: trimmedBody });
-      const shouldMoveToInProgress = window.confirm(
-        "Move this task back to in_progress and assign it to agent?",
-      );
+      const shouldMoveToInProgress = shouldOfferReassignPrompt
+        ? window.confirm("Move this task back to in_progress and assign it to agent?")
+        : false;
       if (shouldMoveToInProgress) {
         setStatus("in_progress");
         setAssignedType("agent");
