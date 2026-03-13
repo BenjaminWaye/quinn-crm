@@ -5,6 +5,7 @@ import express, { Request, Response } from "express";
 admin.initializeApp();
 
 const db = admin.firestore();
+const storage = admin.storage();
 const eu = functions.region("europe-west1");
 const runtimeConfig = functions.config();
 const OWNER_UID = process.env.OWNER_UID ?? runtimeConfig?.app?.owner_uid ?? "";
@@ -32,6 +33,23 @@ type TaskPriority = "low" | "medium" | "high" | "urgent";
 type TaskType = "dev" | "outreach" | "content" | "seo" | "design" | "research" | "admin" | "bug" | "other";
 type ContactStatus = "new" | "contacted" | "interested" | "follow_up" | "customer" | "inactive";
 type ContactKind = "lead" | "customer" | "partner" | "investor" | "vendor" | "other";
+
+type TaskAttachment = {
+  id: string;
+  name: string;
+  contentType: string;
+  sizeBytes: number;
+  storagePath: string;
+  downloadUrl: string;
+  uploadedAt: FirebaseFirestore.FieldValue;
+};
+
+type AttachmentUploadInput = {
+  name?: string;
+  dataUrl?: string;
+  contentType?: string;
+  sizeBytes?: number;
+};
 
 const TASK_STATUSES: TaskStatus[] = ["backlog", "in_progress", "blocked", "review", "done"];
 const TASK_PRIORITIES: TaskPriority[] = ["low", "medium", "high", "urgent"];
@@ -99,6 +117,96 @@ function slugify(input: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 64);
 }
+
+function sanitizeFileName(input: string): string {
+  return input.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120) || "file";
+}
+
+function parseDataUrl(dataUrl: string): { contentType: string; buffer: Buffer } {
+  const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/);
+  if (!match) {
+    throw new Error("Invalid attachment data URL");
+  }
+  const contentType = String(match[1] ?? "application/octet-stream").toLowerCase();
+  const buffer = Buffer.from(match[2], "base64");
+  return { contentType, buffer };
+}
+
+function assertAllowedContentType(contentType: string) {
+  if (
+    contentType.startsWith("image/") ||
+    contentType === "application/pdf" ||
+    contentType.startsWith("text/") ||
+    contentType === "application/zip" ||
+    contentType === "application/x-zip-compressed"
+  ) {
+    return;
+  }
+  throw new Error(`Unsupported attachment content type: ${contentType}`);
+}
+
+function sanitizeExistingAttachment(input: unknown): Omit<TaskAttachment, "uploadedAt"> | null {
+  if (!input || typeof input !== "object") return null;
+  const row = input as Record<string, unknown>;
+  const id = String(row.id ?? "").trim();
+  const name = String(row.name ?? "").trim();
+  const contentType = String(row.contentType ?? "").trim().toLowerCase();
+  const storagePath = String(row.storagePath ?? "").trim();
+  const downloadUrl = String(row.downloadUrl ?? "").trim();
+  const sizeBytes = Number(row.sizeBytes ?? 0);
+  if (!id || !name || !contentType || !storagePath || !downloadUrl) return null;
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || sizeBytes > 8 * 1024 * 1024) return null;
+  return {
+    id,
+    name: sanitizeFileName(name),
+    contentType,
+    sizeBytes,
+    storagePath,
+    downloadUrl,
+  };
+}
+
+async function uploadTaskAttachment(params: {
+  productId: string;
+  taskId: string;
+  scope: "task" | "comment";
+  upload: AttachmentUploadInput;
+}): Promise<TaskAttachment> {
+  const dataUrl = String(params.upload.dataUrl ?? "").trim();
+  const fileName = sanitizeFileName(String(params.upload.name ?? "attachment"));
+  if (!dataUrl) throw new Error("Attachment data is required");
+  const parsed = parseDataUrl(dataUrl);
+  const contentType = String(params.upload.contentType ?? parsed.contentType).toLowerCase();
+  assertAllowedContentType(contentType);
+  const sizeBytes = parsed.buffer.byteLength;
+  if (sizeBytes <= 0 || sizeBytes > 8 * 1024 * 1024) {
+    throw new Error("Attachment exceeds 8MB limit");
+  }
+
+  const attachmentId = db.collection("_ids").doc().id;
+  const storagePath = `task-attachments/${params.productId}/${params.taskId}/${params.scope}/${attachmentId}-${fileName}`;
+  const bucket = storage.bucket();
+  const file = bucket.file(storagePath);
+  await file.save(parsed.buffer, {
+    contentType,
+    resumable: false,
+    metadata: {
+      cacheControl: "private, max-age=31536000",
+    },
+  });
+  const [downloadUrl] = await file.getSignedUrl({ action: "read", expires: "2100-01-01" });
+
+  return {
+    id: attachmentId,
+    name: fileName,
+    contentType,
+    sizeBytes,
+    storagePath,
+    downloadUrl,
+    uploadedAt: nowTs(),
+  };
+}
+
 
 async function resolveProductId(input: string): Promise<string> {
   const raw = input.trim();
@@ -359,8 +467,18 @@ async function createTaskInternal(input: {
   checklist?: Array<{ text: string }>;
   source?: "manual" | "openclaw" | "automation";
   blockedReason?: string;
+  attachments?: AttachmentUploadInput[];
 }) {
   const taskRef = db.collection(paths.tasks(input.productId)).doc();
+
+  const uploadedTaskAttachments = (
+    await Promise.all((input.attachments ?? []).slice(0, 10).map((upload) => uploadTaskAttachment({
+      productId: input.productId,
+      taskId: taskRef.id,
+      scope: "task",
+      upload,
+    })))
+  ).filter(Boolean);
 
   const task = {
     id: taskRef.id,
@@ -386,6 +504,7 @@ async function createTaskInternal(input: {
     commentCount: 0,
     source: input.source ?? "manual",
     blockedReason: input.blockedReason?.trim() || "",
+    attachments: uploadedTaskAttachments,
     createdBy: input.actorId,
     createdAt: nowTs(),
     updatedAt: nowTs(),
@@ -448,6 +567,35 @@ async function updateTaskInternal(input: {
       .filter(Boolean);
   }
 
+  const retainedAttachments = Array.isArray(input.patch.attachments)
+    ? input.patch.attachments
+        .map((row) => sanitizeExistingAttachment(row))
+        .filter((row): row is Omit<TaskAttachment, "uploadedAt"> => Boolean(row))
+        .slice(0, 10)
+    : Array.isArray(currentData.attachments)
+      ? currentData.attachments
+          .map((row: unknown) => sanitizeExistingAttachment(row))
+          .filter((row: Omit<TaskAttachment, "uploadedAt"> | null): row is Omit<TaskAttachment, "uploadedAt"> => Boolean(row))
+          .slice(0, 10)
+      : [];
+
+  const newAttachmentsInput = Array.isArray(input.patch.newAttachments)
+    ? (input.patch.newAttachments as AttachmentUploadInput[]).slice(0, Math.max(0, 10 - retainedAttachments.length))
+    : [];
+  const uploadedTaskAttachments = await Promise.all(
+    newAttachmentsInput.map((upload) =>
+      uploadTaskAttachment({
+        productId: input.productId,
+        taskId: input.taskId,
+        scope: "task",
+        upload,
+      }),
+    ),
+  );
+  if (Array.isArray(input.patch.attachments) || newAttachmentsInput.length > 0) {
+    updatePayload.attachments = [...retainedAttachments, ...uploadedTaskAttachments];
+  }
+
   let nextStatus: TaskStatus | undefined;
   if (typeof nextStatusRaw === "string") {
     nextStatus = assertEnum(nextStatusRaw, TASK_STATUSES, "status");
@@ -491,11 +639,20 @@ async function addTaskCommentInternal(input: {
   body: string;
   actorType: "owner" | "agent";
   actorId: string;
+  attachments?: AttachmentUploadInput[];
 }) {
   const body = requireString(input.body, "body", 1, 3000);
   const commentsRef = db.collection(paths.taskComments(input.productId, input.taskId));
   const commentRef = commentsRef.doc();
   const taskRef = db.doc(paths.task(input.productId, input.taskId));
+  const uploadedCommentAttachments = (
+    await Promise.all((input.attachments ?? []).slice(0, 10).map((upload) => uploadTaskAttachment({
+      productId: input.productId,
+      taskId: input.taskId,
+      scope: "comment",
+      upload,
+    })))
+  ).filter(Boolean);
 
   await db.runTransaction(async (tx) => {
     const taskSnap = await tx.get(taskRef);
@@ -513,6 +670,7 @@ async function addTaskCommentInternal(input: {
       authorType: input.actorType,
       authorId: input.actorId,
       body,
+      attachments: uploadedCommentAttachments,
       createdAt: nowTs(),
     });
 
@@ -772,6 +930,7 @@ export const createTask = eu.https.onCall(async (data, context) => {
       checklist: data?.checklist,
       source: data?.source,
       blockedReason: data?.blockedReason,
+      attachments: Array.isArray(data?.attachments) ? data.attachments : [],
     });
 
     return { taskId };
@@ -854,6 +1013,7 @@ export const addTaskComment = eu.https.onCall(async (data, context) => {
       body,
       actorType: "owner",
       actorId: ownerUid,
+      attachments: Array.isArray(data?.attachments) ? data.attachments : [],
     });
 
     return { commentId };
@@ -1136,6 +1296,7 @@ openclaw.post("/api/openclaw/createTask", async (req, res) => {
       checklist: req.body?.checklist,
       source: "openclaw",
       blockedReason: req.body?.blockedReason,
+      attachments: Array.isArray(req.body?.attachments) ? req.body.attachments : [],
     });
 
     await finishAgentRun(run, { status: "success", outputSummary: `taskId:${taskId}` });
@@ -1188,6 +1349,7 @@ openclaw.post("/api/openclaw/addTaskComment", async (req, res) => {
       body: req.body?.body,
       actorType: "agent",
       actorId: agentId,
+      attachments: Array.isArray(req.body?.attachments) ? req.body.attachments : [],
     });
 
     await finishAgentRun(run, { status: "success", outputSummary: `commentId:${commentId}` });

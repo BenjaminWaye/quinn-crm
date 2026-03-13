@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { addTaskComment, deleteTask, getTask, listTaskComments, updateTask, type TaskCommentRecord, type TaskRecord } from "../lib/data";
+import { addTaskComment, deleteTask, getTask, listTaskComments, updateTask, type TaskAttachmentRecord, type TaskAttachmentUpload, type TaskCommentRecord, type TaskRecord } from "../lib/data";
+import { attachmentIconLabel, fileToTaskAttachmentUpload, formatBytes } from "../lib/taskAttachments";
 import { formatDateTime } from "../lib/time";
 import { renderCommentBodyHtml, renderCommentMeta } from "../lib/commentMarkdown";
 
@@ -46,6 +47,9 @@ export function ProductTaskPage() {
   const [savingComment, setSavingComment] = useState(false);
   const [commentError, setCommentError] = useState("");
   const [shareMessage, setShareMessage] = useState("");
+  const [taskAttachments, setTaskAttachments] = useState<TaskAttachmentRecord[]>([]);
+  const [newTaskAttachments, setNewTaskAttachments] = useState<TaskAttachmentUpload[]>([]);
+  const [commentAttachments, setCommentAttachments] = useState<TaskAttachmentUpload[]>([]);
 
   const buildPatch = () => ({
     title: title.trim(),
@@ -79,6 +83,15 @@ export function ProductTaskPage() {
         done: /^\[x\]\s*/i.test(row),
       })),
     blockedReason: blockedReason.trim(),
+    attachments: taskAttachments.map((item) => ({
+      id: item.id,
+      name: item.name,
+      contentType: item.contentType,
+      sizeBytes: item.sizeBytes,
+      storagePath: item.storagePath,
+      downloadUrl: item.downloadUrl,
+    })),
+    newAttachments: newTaskAttachments,
   });
 
   const load = async () => {
@@ -100,6 +113,9 @@ export function ProductTaskPage() {
     setBlockedReason(nextTask?.blockedReason ?? "");
     setChecklistText((nextTask?.checklist ?? []).map((item) => (item.done ? `[x] ${item.text}` : `[ ] ${item.text}`)).join("\n"));
     setComments(nextComments);
+    setTaskAttachments(nextTask?.attachments ?? []);
+    setNewTaskAttachments([]);
+    setCommentAttachments([]);
     if (nextTask) {
       setSeenCommentCount(productId, taskId, Number(nextTask.commentCount ?? 0));
     }
@@ -123,6 +139,15 @@ export function ProductTaskPage() {
           done: Boolean(item.done),
         })),
         blockedReason: (nextTask.blockedReason ?? "").trim(),
+        attachments: (nextTask.attachments ?? []).map((item) => ({
+          id: item.id,
+          name: item.name,
+          contentType: item.contentType,
+          sizeBytes: item.sizeBytes,
+          storagePath: item.storagePath,
+          downloadUrl: item.downloadUrl,
+        })),
+        newAttachments: [],
       };
       setInitialSnapshot(JSON.stringify(snapshot));
     }
@@ -149,7 +174,24 @@ export function ProductTaskPage() {
     status,
     title,
     type,
+    taskAttachments,
+    newTaskAttachments,
   ]);
+
+
+  const onPickNewTaskAttachments = async (files: FileList | null) => {
+    if (!files) return;
+    const selected = Array.from(files).slice(0, 10 - taskAttachments.length - newTaskAttachments.length);
+    const uploads = await Promise.all(selected.map((file) => fileToTaskAttachmentUpload(file)));
+    setNewTaskAttachments((current) => [...current, ...uploads].slice(0, Math.max(0, 10 - taskAttachments.length)));
+  };
+
+  const onPickCommentAttachments = async (files: FileList | null) => {
+    if (!files) return;
+    const selected = Array.from(files).slice(0, 10 - commentAttachments.length);
+    const uploads = await Promise.all(selected.map((file) => fileToTaskAttachmentUpload(file)));
+    setCommentAttachments((current) => [...current, ...uploads].slice(0, 10));
+  };
 
   const onComment = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -163,6 +205,14 @@ export function ProductTaskPage() {
       authorType: "owner",
       authorId: "you",
       createdAt: new Date().toISOString(),
+      attachments: commentAttachments.map((attachment, index) => ({
+        id: `tmp_comment_${index}_${attachment.name}`,
+        name: attachment.name,
+        contentType: attachment.contentType,
+        sizeBytes: attachment.sizeBytes,
+        storagePath: "pending/local",
+        downloadUrl: attachment.dataUrl,
+      })),
     };
     try {
       setSavingComment(true);
@@ -179,7 +229,8 @@ export function ProductTaskPage() {
           : current,
       );
       setBody("");
-      await addTaskComment({ productId, taskId, body: trimmedBody });
+      setCommentAttachments([]);
+      await addTaskComment({ productId, taskId, body: trimmedBody, attachments: commentAttachments });
       const shouldMoveToInProgress = shouldOfferReassignPrompt
         ? window.confirm("Move this task back to in_progress and assign it to agent?")
         : false;
@@ -355,6 +406,26 @@ export function ProductTaskPage() {
           <input className="border border-neutral-300 rounded-lg px-3 py-2 md:col-span-2" placeholder="Linked doc IDs (comma separated)" value={linkedDocIdsText} onChange={(e) => setLinkedDocIdsText(e.target.value)} />
         </div>
         <textarea className="w-full border border-neutral-300 rounded-lg px-3 py-2 min-h-[100px]" placeholder="Checklist rows, one per line. Prefix with [x] for done." value={checklistText} onChange={(e) => setChecklistText(e.target.value)} />
+        <div className="space-y-2">
+          <label className="text-xs text-neutral-600">Task attachments (max 10 files, 8MB each)</label>
+          <input type="file" multiple onChange={(e) => void onPickNewTaskAttachments(e.target.files)} className="block w-full text-sm" />
+          {(taskAttachments.length > 0 || newTaskAttachments.length > 0) && (
+            <div className="space-y-1">
+              {taskAttachments.map((attachment, index) => (
+                <div key={`existing-${attachment.id}-${index}`} className="flex items-center justify-between text-xs border border-neutral-200 rounded px-2 py-1">
+                  <a href={attachment.downloadUrl} target="_blank" rel="noreferrer" className="hover:underline">{attachmentIconLabel(attachment.contentType)} {attachment.name} • {formatBytes(attachment.sizeBytes)}</a>
+                  <button type="button" className="text-red-600" onClick={() => setTaskAttachments((current) => current.filter((_, i) => i !== index))}>Remove</button>
+                </div>
+              ))}
+              {newTaskAttachments.map((attachment, index) => (
+                <div key={`new-${attachment.name}-${index}`} className="flex items-center justify-between text-xs border border-neutral-200 rounded px-2 py-1">
+                  <span>{attachmentIconLabel(attachment.contentType)} {attachment.name} • {formatBytes(attachment.sizeBytes)}</span>
+                  <button type="button" className="text-red-600" onClick={() => setNewTaskAttachments((current) => current.filter((_, i) => i !== index))}>Remove</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-60" disabled={savingTask || deletingTask || !title.trim() || !hasChanges}>
             {savingTask ? "Saving..." : "Save task"}
@@ -389,6 +460,7 @@ export function ProductTaskPage() {
           <p>commentCount: {task.commentCount ?? 0}</p>
           <p>latestCommentPreview: {task.latestCommentPreview || "-"}</p>
           <p>linkedDocIds: {(task.linkedDocIds ?? []).join(", ") || "-"}</p>
+          <p>attachments: {taskAttachments.length + newTaskAttachments.length}</p>
           <p>createdBy: {task.createdBy ?? "-"}</p>
           <p>createdAt: {formatDateTime(task.createdAt)}</p>
           <p>updatedAt: {formatDateTime(task.updatedAt)}</p>
@@ -400,6 +472,19 @@ export function ProductTaskPage() {
         <h3 className="font-semibold">Add comment</h3>
         <form className="space-y-3" onSubmit={(event) => void onComment(event)}>
           <textarea className="w-full border border-neutral-300 rounded-lg px-3 py-2 min-h-[100px]" value={body} onChange={(e) => setBody(e.target.value)} />
+          <div className="space-y-2">
+            <input type="file" multiple onChange={(e) => void onPickCommentAttachments(e.target.files)} className="block w-full text-sm" />
+            {commentAttachments.length > 0 && (
+              <div className="space-y-1">
+                {commentAttachments.map((attachment, index) => (
+                  <div key={`${attachment.name}-${index}`} className="flex items-center justify-between text-xs border border-neutral-200 rounded px-2 py-1">
+                    <span>{attachmentIconLabel(attachment.contentType)} {attachment.name} • {formatBytes(attachment.sizeBytes)}</span>
+                    <button type="button" className="text-red-600" onClick={() => setCommentAttachments((current) => current.filter((_, i) => i !== index))}>Remove</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-60" disabled={savingComment || !body.trim()}>
             {savingComment ? "Saving..." : "Save comment"}
           </button>
