@@ -27,6 +27,23 @@ export type ProductRecord = {
   lastActivityAt?: unknown;
 };
 
+export type TaskAttachmentRecord = {
+  id: string;
+  name: string;
+  contentType: string;
+  sizeBytes: number;
+  storagePath: string;
+  downloadUrl: string;
+  uploadedAt?: unknown;
+};
+
+export type TaskAttachmentUpload = {
+  name: string;
+  dataUrl: string;
+  contentType: string;
+  sizeBytes: number;
+};
+
 export type TaskRecord = {
   id: string;
   productId?: string;
@@ -52,6 +69,7 @@ export type TaskRecord = {
   createdBy?: string;
   createdAt?: unknown;
   completedAt?: unknown;
+  attachments?: TaskAttachmentRecord[];
 };
 
 export type ContactRecord = {
@@ -118,6 +136,7 @@ export type TaskCommentRecord = {
   authorType: string;
   authorId: string;
   createdAt?: unknown;
+  attachments?: TaskAttachmentRecord[];
 };
 
 export type OpenClawMemoryEntry = {
@@ -229,6 +248,18 @@ type MockDb = {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function toOptimisticAttachmentRecord(input: TaskAttachmentUpload, prefix = "tmp"): TaskAttachmentRecord {
+  return {
+    id: `${prefix}_${crypto.randomUUID()}`,
+    name: input.name,
+    contentType: input.contentType || "application/octet-stream",
+    sizeBytes: Number(input.sizeBytes ?? 0),
+    storagePath: "pending/local",
+    downloadUrl: input.dataUrl,
+    uploadedAt: nowIso(),
+  };
 }
 
 function taskKey(productId: string, taskId: string) {
@@ -1004,6 +1035,7 @@ export async function createTask(input: {
   checklist?: Array<{ text: string }>;
   source?: "manual" | "automation";
   blockedReason?: string;
+  attachments?: TaskAttachmentUpload[];
 }) {
   if (SKIP_AUTH) {
     const dbState = loadMockDb();
@@ -1027,6 +1059,7 @@ export async function createTask(input: {
       commentCount: 0,
       source: input.source ?? "manual",
       blockedReason: input.blockedReason ?? "",
+      attachments: (input.attachments ?? []).map((item) => toOptimisticAttachmentRecord(item)),
       createdBy: "local",
       createdAt: nowIso(),
       updatedAt: nowIso(),
@@ -1060,6 +1093,8 @@ export async function updateTask(input: {
     linkedDocIds: string[];
     checklist: Array<{ id: string; text: string; done: boolean }>;
     blockedReason: string;
+    attachments: TaskAttachmentRecord[];
+    newAttachments: TaskAttachmentUpload[];
   }>;
 }) {
   if (SKIP_AUTH) {
@@ -1107,11 +1142,11 @@ export async function deleteTask(input: { productId: string; taskId: string }) {
   return call(input);
 }
 
-export async function addTaskComment(input: { productId: string; taskId: string; body: string }) {
+export async function addTaskComment(input: { productId: string; taskId: string; body: string; attachments?: TaskAttachmentUpload[] }) {
   if (SKIP_AUTH) {
     const dbState = loadMockDb();
     const id = crypto.randomUUID();
-    const comment: TaskCommentRecord = { id, body: input.body, authorType: "owner", authorId: "local", createdAt: nowIso() };
+    const comment: TaskCommentRecord = { id, body: input.body, authorType: "owner", authorId: "local", createdAt: nowIso(), attachments: (input.attachments ?? []).map((item) => toOptimisticAttachmentRecord(item, "tmp_comment")) };
     const key = taskKey(input.productId, input.taskId);
     dbState.commentsByTask[key] = [...(dbState.commentsByTask[key] ?? []), comment];
     dbState.tasksByProduct[input.productId] = (dbState.tasksByProduct[input.productId] ?? []).map((task) =>
