@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { createTask, listTasks, updateTaskStatus, type TaskRecord } from "../lib/data";
+import { createTask, listTasks, updateTaskStatus, type TaskAttachmentUpload, type TaskRecord } from "../lib/data";
+import { attachmentIconLabel, fileToTaskAttachmentUpload, formatBytes } from "../lib/taskAttachments";
 import { formatDateTime } from "../lib/time";
 
 const STATUSES = ["backlog", "in_progress", "blocked", "review", "done"];
@@ -42,6 +43,7 @@ export function ProductTasksPage() {
   const [source, setSource] = useState<"manual" | "automation">("manual");
   const [blockedReason, setBlockedReason] = useState("");
   const [checklistText, setChecklistText] = useState("");
+  const [taskAttachments, setTaskAttachments] = useState<TaskAttachmentUpload[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [view, setView] = useState<"list" | "board">("list");
   const [busy, setBusy] = useState(false);
@@ -94,6 +96,14 @@ export function ProductTasksPage() {
       commentCount: 0,
       source,
       blockedReason: blockedReason.trim(),
+      attachments: taskAttachments.map((attachment, index) => ({
+        id: `tmp_${index}_${attachment.name}`,
+        name: attachment.name,
+        contentType: attachment.contentType,
+        sizeBytes: attachment.sizeBytes,
+        storagePath: "pending/local",
+        downloadUrl: attachment.dataUrl,
+      })),
       createdAt: now,
       updatedAt: now,
     };
@@ -129,6 +139,7 @@ export function ProductTasksPage() {
           .map((text) => ({ text })),
         source,
         blockedReason: blockedReason.trim(),
+        attachments: taskAttachments,
       });
       const createdTaskId = result.data.taskId;
       setTasks((current) =>
@@ -154,6 +165,7 @@ export function ProductTasksPage() {
       setSource("manual");
       setBlockedReason("");
       setChecklistText("");
+      setTaskAttachments([]);
       setShowCreateForm(false);
       void load();
     } catch (nextError) {
@@ -164,6 +176,14 @@ export function ProductTasksPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+
+  const onPickTaskAttachments = async (files: FileList | null) => {
+    if (!files) return;
+    const selected = Array.from(files).slice(0, 10 - taskAttachments.length);
+    const uploads = await Promise.all(selected.map((file) => fileToTaskAttachmentUpload(file)));
+    setTaskAttachments((current) => [...current, ...uploads].slice(0, 10));
   };
 
   const onStatus = async (taskId: string, status: string) => {
@@ -224,6 +244,20 @@ export function ProductTasksPage() {
               <input className="border border-neutral-300 rounded-lg px-3 py-2" placeholder="Blocked reason (optional)" value={blockedReason} onChange={(e) => setBlockedReason(e.target.value)} />
             </div>
             <textarea className="w-full border border-neutral-300 rounded-lg px-3 py-2 min-h-[80px]" placeholder="Checklist items (one per line)" value={checklistText} onChange={(e) => setChecklistText(e.target.value)} />
+            <div className="space-y-2">
+              <label className="text-xs text-neutral-600">Task attachments (max 10 files, 8MB each)</label>
+              <input type="file" multiple onChange={(e) => void onPickTaskAttachments(e.target.files)} className="block w-full text-sm" />
+              {taskAttachments.length > 0 && (
+                <div className="space-y-1">
+                  {taskAttachments.map((attachment, index) => (
+                    <div key={`${attachment.name}-${index}`} className="flex items-center justify-between text-xs border border-neutral-200 rounded px-2 py-1">
+                      <span>{attachmentIconLabel(attachment.contentType)} {attachment.name} • {formatBytes(attachment.sizeBytes)}</span>
+                      <button type="button" className="text-red-600" onClick={() => setTaskAttachments((current) => current.filter((_, i) => i !== index))}>Remove</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-60" disabled={busy || !title.trim()}>
               {busy ? "Adding..." : "Add"}
             </button>
