@@ -88,6 +88,23 @@ All are `POST` and require header `x-openclaw-key: <OPENCLOW_SECRET>`.
 - `/api/openclaw/syncMemory`
 - `/api/openclaw/syncDocs`
 
+## Dashboard Relay Attachment Support
+`scripts/dashboard-relay.mjs` supports local file attachments via `--attach` for:
+- `create`
+- `update`
+- `comment`
+
+Examples:
+- `node scripts/dashboard-relay.mjs create --productId=callmycall --title="Draft SOP" --description="..." --attach="docs/sop.md"`
+- `node scripts/dashboard-relay.mjs update --productId=callmycall --taskId=abc123 --status=review --attach="exports/report.pdf,screenshots/flow.png"`
+- `node scripts/dashboard-relay.mjs comment --productId=callmycall --taskId=abc123 --comment="SOP draft attached" --attach="docs/sop.md"`
+
+Notes:
+- `--attach` takes a comma-separated list of local file paths.
+- Files are encoded as `dataUrl` payloads before sending.
+- Missing/unreadable files are skipped by the relay script.
+- Keep total payload size small (Cloud Functions request limits apply).
+
 ## Response Envelope
 ```ts
 { ok: boolean; data?: unknown; error?: string }
