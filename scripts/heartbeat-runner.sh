@@ -24,6 +24,8 @@ allowed_ext = {
 }
 include_dirs = [
     'memory', 'activity_notes', 'intel', 'tasks', 'ops', 'docs', 'exports',
+    # allow project-specific doc dumps inside repos
+    'quinn-crm/docs', 'quinn-crm/personal',
     'frames', 'frames5', 'cuts', 'cuts2', 'cuts3', 'cuts4', 'cuts5', 'adoc-export',
     'ComfyUI/output'
 ]
