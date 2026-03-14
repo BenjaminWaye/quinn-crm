@@ -88,6 +88,32 @@ All are `POST` and require header `x-openclaw-key: <OPENCLOW_SECRET>`.
 - `/api/openclaw/syncMemory`
 - `/api/openclaw/syncDocs`
 
+Attachment behavior for OpenClaw:
+- `createTask` supports `attachments` (array of `{ name, contentType, dataUrl }`).
+- `updateTask` supports `patch.newAttachments` (same upload format).
+- `addTaskComment` supports `attachments` (same upload format).
+- `listTasks` and `getTask` return task-level `attachments` with `downloadUrl`.
+- `getTask` with `includeComments=true` returns comment attachments in each comment row.
+
+Example `getTask` request:
+```json
+{
+  "productId": "callmycall",
+  "taskId": "abc123",
+  "includeComments": true,
+  "commentLimit": 20
+}
+```
+
+Example attachment upload object:
+```json
+{
+  "name": "sop-draft.md",
+  "contentType": "text/markdown",
+  "dataUrl": "data:text/markdown;base64,IyBTT1AgRHJhZnQKLi4u"
+}
+```
+
 ## Dashboard Relay Attachment Support
 `scripts/dashboard-relay.mjs` supports local file attachments via `--attach` for:
 - `create`
