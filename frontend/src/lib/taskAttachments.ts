@@ -28,10 +28,27 @@ export function formatBytes(sizeBytes: number): string {
   return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
+const OFFICE_DOC_MIME_TYPES = new Set([
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+]);
+
+const ARCHIVE_MIME_MARKERS = ["zip", "x-7z", "rar", "tar", "gzip", "x-gzip", "x-tar"];
+
 export function attachmentIconLabel(contentType: string): string {
-  if (contentType.startsWith("image/")) return "🖼️";
-  if (contentType === "application/pdf") return "📄";
-  if (contentType.includes("zip")) return "🗜️";
-  if (contentType.startsWith("text/")) return "📝";
+  const normalized = String(contentType || "").toLowerCase();
+  if (normalized.startsWith("image/")) return "🖼️";
+  if (normalized.startsWith("video/")) return "🎬";
+  if (normalized.startsWith("audio/")) return "🎵";
+  if (normalized === "application/pdf") return "📄";
+  if (normalized === "text/csv") return "📊";
+  if (OFFICE_DOC_MIME_TYPES.has(normalized)) return "📊";
+  if (ARCHIVE_MIME_MARKERS.some((marker) => normalized.includes(marker))) return "🗜️";
+  if (normalized.startsWith("text/")) return "📝";
+  if (normalized.includes("json") || normalized.includes("xml") || normalized.includes("yaml")) return "📝";
   return "📎";
 }
