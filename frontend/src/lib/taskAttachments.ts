@@ -31,13 +31,20 @@ export function formatBytes(sizeBytes: number): string {
 const OFFICE_DOC_MIME_TYPES = new Set([
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-word.document.macroenabled.12",
   "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel.sheet.macroenabled.12",
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.ms-powerpoint.presentation.macroenabled.12",
+  "application/vnd.oasis.opendocument.text",
+  "application/vnd.oasis.opendocument.spreadsheet",
+  "application/vnd.oasis.opendocument.presentation",
 ]);
 
-const ARCHIVE_MIME_MARKERS = ["zip", "x-7z", "rar", "tar", "gzip", "x-gzip", "x-tar"];
+const ARCHIVE_MIME_MARKERS = ["zip", "x-7z", "rar", "tar", "gzip", "x-gzip", "x-tar", "bzip", "xz"];
+const STRUCTURED_TEXT_MARKERS = ["json", "xml", "yaml", "yml", "toml", "ini"];
 
 export function attachmentIconLabel(contentType: string): string {
   const normalized = String(contentType || "").toLowerCase();
@@ -49,6 +56,6 @@ export function attachmentIconLabel(contentType: string): string {
   if (OFFICE_DOC_MIME_TYPES.has(normalized)) return "📊";
   if (ARCHIVE_MIME_MARKERS.some((marker) => normalized.includes(marker))) return "🗜️";
   if (normalized.startsWith("text/")) return "📝";
-  if (normalized.includes("json") || normalized.includes("xml") || normalized.includes("yaml")) return "📝";
+  if (STRUCTURED_TEXT_MARKERS.some((marker) => normalized.includes(marker))) return "📝";
   return "📎";
 }
