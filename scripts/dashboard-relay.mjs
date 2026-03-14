@@ -8,9 +8,9 @@ import { resolve, basename, extname } from 'node:path';
  *
  * Usage:
  *   node scripts/dashboard-relay.mjs poll [--productId=<id>]
- *   node scripts/dashboard-relay.mjs create --title="..." --description="..." [--productId=<id>] [--priority=high]
- *   node scripts/dashboard-relay.mjs update --taskId=<id> [--status=in_progress] [--title="..."]
- *   node scripts/dashboard-relay.mjs comment --taskId=<id> --comment="..."
+ *   node scripts/dashboard-relay.mjs create --title="..." --description="..." [--productId=<id>] [--priority=high] [--attach="path1,path2"]
+ *   node scripts/dashboard-relay.mjs update --taskId=<id> [--status=in_progress] [--title="..."] [--attach="path1,path2"]
+ *   node scripts/dashboard-relay.mjs comment --taskId=<id> --comment="..." [--attach="path1,path2"]
  *   node scripts/dashboard-relay.mjs list-contacts [--productId=<id>] [--limit=50]
  *   node scripts/dashboard-relay.mjs create-contact --name="..." [--productId=<id>] [--email="..."]
  *   node scripts/dashboard-relay.mjs update-contact --contactId=<id> [--status=contacted] [--name="..."]
@@ -57,6 +57,58 @@ function parseArgs(argv) {
     }
   }
   return out;
+}
+
+function guessContentType(fileName) {
+  const ext = extname(fileName).toLowerCase();
+  if (ext === '.csv') return 'text/csv';
+  if (ext === '.json') return 'application/json';
+  if (ext === '.txt') return 'text/plain';
+  if (ext === '.md' || ext === '.markdown') return 'text/markdown';
+  if (ext === '.pdf') return 'application/pdf';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.mp4') return 'video/mp4';
+  if (ext === '.mov') return 'video/quicktime';
+  if (ext === '.webm') return 'video/webm';
+  return 'application/octet-stream';
+}
+
+function fileToDataUrl(absPath, contentType) {
+  const buf = readFileSync(absPath);
+  const b64 = buf.toString('base64');
+  return `data:${contentType};base64,${b64}`;
+}
+
+function parseCsvList(value) {
+  if (!value) return [];
+  return String(value)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function buildAttachmentUploads(paths) {
+  const uploads = [];
+  for (const p of paths) {
+    const abs = resolve(p);
+    try {
+      const st = statSync(abs);
+      const name = basename(abs);
+      const contentType = guessContentType(name);
+      uploads.push({
+        name,
+        contentType,
+        sizeBytes: st.size,
+        dataUrl: fileToDataUrl(abs, contentType),
+      });
+    } catch {
+      // skip missing/unreadable files
+    }
+  }
+  return uploads;
 }
 
 async function postJson(url, body) {
@@ -361,6 +413,8 @@ async function cmdCreate(args) {
   const status = args.status || 'backlog';
   const dueDate = args.dueDate || null;
 
+  const attachments = buildAttachmentUploads(parseCsvList(args.attach));
+
   const body = {
     productId,
     agentId,
@@ -371,6 +425,7 @@ async function cmdCreate(args) {
     status,
     dueDate,
     source: 'manual',
+    attachments: attachments.length ? attachments : undefined,
   };
 
   const data = await postJson(CREATE_TASK_URL, body);
@@ -384,12 +439,15 @@ async function cmdUpdate(args) {
   if (!taskId) throw new Error('--taskId is required');
   if (!productId) throw new Error('--productId is required (or set DEFAULT_PRODUCT_ID)');
 
+  const newAttachments = buildAttachmentUploads(parseCsvList(args.attach));
+
   const patch = {
     title: args.title,
     description: args.description,
     status: args.status,
     priority: args.priority,
     dueDate: args.dueDate,
+    newAttachments: newAttachments.length ? newAttachments : undefined,
   };
 
   Object.keys(patch).forEach((k) => patch[k] === undefined && delete patch[k]);
@@ -414,11 +472,14 @@ async function cmdComment(args) {
   if (!productId) throw new Error('--productId is required (or set DEFAULT_PRODUCT_ID)');
   if (!bodyText) throw new Error('--comment is required');
 
+  const attachments = buildAttachmentUploads(parseCsvList(args.attach));
+
   const body = {
     productId,
     agentId,
     taskId,
     body: bodyText,
+    attachments: attachments.length ? attachments : undefined,
   };
 
   const data = await postJson(ADD_TASK_COMMENT_URL, body);
