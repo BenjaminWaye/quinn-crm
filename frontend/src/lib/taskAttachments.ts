@@ -29,9 +29,44 @@ export function formatBytes(sizeBytes: number): string {
 }
 
 export function attachmentIconLabel(contentType: string): string {
-  if (contentType.startsWith("image/")) return "🖼️";
-  if (contentType === "application/pdf") return "📄";
-  if (contentType.includes("zip")) return "🗜️";
-  if (contentType.startsWith("text/")) return "📝";
+  const normalized = String(contentType || "").trim().toLowerCase();
+
+  if (normalized.startsWith("image/")) return "🖼️";
+  if (normalized.startsWith("video/")) return "🎬";
+  if (normalized.startsWith("audio/")) return "🎵";
+
+  if (normalized === "application/pdf") return "📄";
+
+  if (
+    normalized === "text/csv"
+    || normalized.includes("spreadsheet")
+    || normalized.includes("excel")
+  ) {
+    return "📊";
+  }
+
+  if (
+    normalized === "application/json"
+    || normalized.endsWith("+json")
+  ) {
+    return "🧾";
+  }
+
+  if (
+    normalized.includes("word")
+    || normalized.includes("officedocument.wordprocessingml")
+  ) {
+    return "📘";
+  }
+
+  if (
+    normalized.includes("presentation")
+    || normalized.includes("powerpoint")
+  ) {
+    return "📽️";
+  }
+
+  if (normalized.includes("zip") || normalized.includes("compressed")) return "🗜️";
+  if (normalized.startsWith("text/")) return "📝";
   return "📎";
 }
