@@ -38,13 +38,15 @@ if (!OPENCLAW_SECRET) {
 }
 
 const API_BASE_URL = (env.API_BASE_URL || 'https://europe-west1-quinn-dash.cloudfunctions.net/api').replace(/\/$/, '');
-const CREATE_TASK_URL = env.CREATE_TASK_URL || `${API_BASE_URL}/openclaw/createTask`;
-const UPDATE_TASK_URL = env.UPDATE_TASK_URL || `${API_BASE_URL}/openclaw/updateTask`;
-const ADD_TASK_COMMENT_URL = env.ADD_TASK_COMMENT_URL || `${API_BASE_URL}/openclaw/addTaskComment`;
-const ADD_ACTIVITY_NOTE_URL = env.ADD_ACTIVITY_NOTE_URL || `${API_BASE_URL}/openclaw/addActivityNote`;
-const GET_TASK_URL = env.GET_TASK_URL || `${API_BASE_URL}/openclaw/getTask`;
+const OPENCLAW_API_BASE = `${API_BASE_URL}/api/openclaw`;
+
+const CREATE_TASK_URL = env.CREATE_TASK_URL || `${OPENCLAW_API_BASE}/createTask`;
+const UPDATE_TASK_URL = env.UPDATE_TASK_URL || `${OPENCLAW_API_BASE}/updateTask`;
+const ADD_TASK_COMMENT_URL = env.ADD_TASK_COMMENT_URL || `${OPENCLAW_API_BASE}/addTaskComment`;
+const ADD_ACTIVITY_NOTE_URL = env.ADD_ACTIVITY_NOTE_URL || `${OPENCLAW_API_BASE}/addActivityNote`;
+const GET_TASK_URL = env.GET_TASK_URL || `${OPENCLAW_API_BASE}/getTask`;
 // NOTE: There is no /openclaw/listTaskComments endpoint in production; use getTask(includeComments=true) instead.
-const SYNC_SCHEDULES_URL = env.SYNC_SCHEDULES_URL || `${API_BASE_URL}/openclaw/syncSchedules`;
+const SYNC_SCHEDULES_URL = env.SYNC_SCHEDULES_URL || `${OPENCLAW_API_BASE}/syncSchedules`;
 const DEFAULT_AGENT_ID = env.DEFAULT_AGENT_ID || 'quinn-main';
 
 function parseArgs(argv) {
@@ -165,7 +167,7 @@ async function cmdPoll(args) {
   let productIds = explicitProductId ? [explicitProductId] : [];
 
   if (productIds.length === 0) {
-    const lp = await postJson(`${API_BASE_URL}/openclaw/listProducts`, {});
+    const lp = await postJson(`${OPENCLAW_API_BASE}/listProducts`, {});
     const items = Array.isArray(lp?.data?.items) ? lp.data.items : [];
     productIds = items.map((p) => p?.id).filter(Boolean);
     if (productIds.length === 0) {
@@ -175,7 +177,7 @@ async function cmdPoll(args) {
 
   const all = [];
   for (const productId of productIds) {
-    const data = await postJson(`${API_BASE_URL}/openclaw/listTasks`, { productId });
+    const data = await postJson(`${OPENCLAW_API_BASE}/listTasks`, { productId });
     const tasks = Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.tasks) ? data.tasks : [];
     const summary = {
       at: nowIso(),
@@ -209,7 +211,7 @@ async function cmdPollAndWork(args) {
   let productIds = explicitProductId ? [explicitProductId] : [];
 
   if (productIds.length === 0) {
-    const lp = await postJson(`${API_BASE_URL}/openclaw/listProducts`, {});
+    const lp = await postJson(`${OPENCLAW_API_BASE}/listProducts`, {});
     const items = Array.isArray(lp?.data?.items) ? lp.data.items : [];
     productIds = items.map((p) => p?.id).filter(Boolean);
     if (productIds.length === 0) {
@@ -219,7 +221,7 @@ async function cmdPollAndWork(args) {
 
   const all = [];
   for (const productId of productIds) {
-    const data = await postJson(`${API_BASE_URL}/openclaw/listTasks`, { productId });
+    const data = await postJson(`${OPENCLAW_API_BASE}/listTasks`, { productId });
     const tasks = Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.tasks) ? data.tasks : [];
     const summary = {
       at: nowIso(),
