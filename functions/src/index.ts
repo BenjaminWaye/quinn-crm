@@ -41,7 +41,6 @@ type TaskAttachment = {
   sizeBytes: number;
   storagePath: string;
   downloadUrl: string;
-  uploadedAt: FirebaseFirestore.FieldValue;
 };
 
 type AttachmentUploadInput = {
@@ -145,7 +144,7 @@ function assertAllowedContentType(contentType: string) {
   throw new Error(`Unsupported attachment content type: ${contentType}`);
 }
 
-function sanitizeExistingAttachment(input: unknown): Omit<TaskAttachment, "uploadedAt"> | null {
+function sanitizeExistingAttachment(input: unknown): TaskAttachment | null {
   if (!input || typeof input !== "object") return null;
   const row = input as Record<string, unknown>;
   const id = String(row.id ?? "").trim();
@@ -203,7 +202,6 @@ async function uploadTaskAttachment(params: {
     sizeBytes,
     storagePath,
     downloadUrl,
-    uploadedAt: nowTs(),
   };
 }
 
@@ -570,12 +568,12 @@ async function updateTaskInternal(input: {
   const retainedAttachments = Array.isArray(input.patch.attachments)
     ? input.patch.attachments
         .map((row) => sanitizeExistingAttachment(row))
-        .filter((row): row is Omit<TaskAttachment, "uploadedAt"> => Boolean(row))
+        .filter((row): row is TaskAttachment => Boolean(row))
         .slice(0, 10)
     : Array.isArray(currentData.attachments)
       ? currentData.attachments
           .map((row: unknown) => sanitizeExistingAttachment(row))
-          .filter((row: Omit<TaskAttachment, "uploadedAt"> | null): row is Omit<TaskAttachment, "uploadedAt"> => Boolean(row))
+          .filter((row: TaskAttachment | null): row is TaskAttachment => Boolean(row))
           .slice(0, 10)
       : [];
 
