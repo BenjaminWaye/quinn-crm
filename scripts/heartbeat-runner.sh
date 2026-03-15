@@ -22,22 +22,39 @@ allowed_ext = {
     '.md', '.markdown', '.txt', '.html', '.htm', '.pdf', '.mp4', '.mov', '.webm',
     '.png', '.jpg', '.jpeg', '.gif', '.webp', '.csv', '.json'
 }
-include_dirs = [
-    'memory', 'activity_notes', 'intel', 'tasks', 'ops', 'docs', 'exports',
-    'frames', 'frames5', 'cuts', 'cuts2', 'cuts3', 'cuts4', 'cuts5', 'adoc-export',
-    'ComfyUI/output'
-]
+
+# Sync policy:
+# - Include *all* documents/media under the workspace root
+# - Exclude dev repos under "Sites/" (and other heavy/dev-only dirs)
+exclude_top = {
+    'Sites',
+    '.git',
+    'node_modules',
+    '.openclaw',
+    'worktrees',
+    '.DS_Store',
+}
+
 files = []
-for p in root.iterdir():
-    if p.is_file() and p.suffix.lower() in allowed_ext:
-        files.append(p.relative_to(root).as_posix())
-for d in include_dirs:
-    dp = root / d
-    if not dp.exists() or not dp.is_dir():
+for p in root.rglob('*'):
+    rel = p.relative_to(root)
+
+    # Exclude by top-level directory name
+    if rel.parts and rel.parts[0] in exclude_top:
         continue
-    for p in dp.rglob('*'):
-        if p.is_file() and p.suffix.lower() in allowed_ext:
-            files.append(p.relative_to(root).as_posix())
+
+    # Exclude any top-level symlink that points into Sites/
+    if rel.parts:
+        top = root / rel.parts[0]
+        try:
+            if top.is_symlink() and 'Sites' in top.resolve().parts:
+                continue
+        except Exception:
+            pass
+
+    if p.is_file() and p.suffix.lower() in allowed_ext:
+        files.append(rel.as_posix())
+
 files = sorted(set(files))
 # keep chunks small to avoid firestore transaction limits
 chunk_size = 80
@@ -73,5 +90,10 @@ node quinn-crm/scripts/dashboard-relay.mjs sync-memory --agentId="$BASE_AGENT_ID
 # 3) Sync local OpenClaw cron schedules to Quinn CRM
 node quinn-crm/scripts/dashboard-relay.mjs sync-schedules
 
-# 4) Run auto-worker for agent tasks across all products (ignore DEFAULT_PRODUCT_ID for this step)
-DEFAULT_PRODUCT_ID="" node quinn-crm/scripts/dashboard-relay.mjs poll-and-work
+# 4) Task auto-worker (DISABLED by default)
+# Rationale: task execution is handled by dedicated cron jobs (quinn-task-executor + quinn-task-executor-code).
+# The heartbeat should focus on syncing docs/memory/schedules and lightweight reporting, not mutating tasks.
+# To run manually: set RUN_POLL_AND_WORK=1
+if [ "${RUN_POLL_AND_WORK:-0}" = "1" ]; then
+  DEFAULT_PRODUCT_ID="" node quinn-crm/scripts/dashboard-relay.mjs poll-and-work
+fi

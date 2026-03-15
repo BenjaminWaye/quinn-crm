@@ -42,7 +42,8 @@ const CREATE_TASK_URL = env.CREATE_TASK_URL || `${API_BASE_URL}/openclaw/createT
 const UPDATE_TASK_URL = env.UPDATE_TASK_URL || `${API_BASE_URL}/openclaw/updateTask`;
 const ADD_TASK_COMMENT_URL = env.ADD_TASK_COMMENT_URL || `${API_BASE_URL}/openclaw/addTaskComment`;
 const ADD_ACTIVITY_NOTE_URL = env.ADD_ACTIVITY_NOTE_URL || `${API_BASE_URL}/openclaw/addActivityNote`;
-const LIST_TASK_COMMENTS_URL = env.LIST_TASK_COMMENTS_URL || `${API_BASE_URL}/openclaw/listTaskComments`;
+const GET_TASK_URL = env.GET_TASK_URL || `${API_BASE_URL}/openclaw/getTask`;
+// NOTE: There is no /openclaw/listTaskComments endpoint in production; use getTask(includeComments=true) instead.
 const SYNC_SCHEDULES_URL = env.SYNC_SCHEDULES_URL || `${API_BASE_URL}/openclaw/syncSchedules`;
 const DEFAULT_AGENT_ID = env.DEFAULT_AGENT_ID || 'quinn-main';
 
@@ -327,17 +328,14 @@ async function cmdPollAndWork(args) {
         // Fetch full recent comments to avoid relying only on latestCommentPreview
         let recentComments = [];
         try {
-          const commentsRes = await postJson(LIST_TASK_COMMENTS_URL, {
+          const taskRes = await postJson(GET_TASK_URL, {
             productId,
             taskId: t.id,
             agentId: DEFAULT_AGENT_ID,
-            limit: 20,
+            includeComments: true,
+            commentLimit: 20,
           });
-          recentComments = Array.isArray(commentsRes?.data?.items)
-            ? commentsRes.data.items
-            : Array.isArray(commentsRes?.data)
-              ? commentsRes.data
-              : [];
+          recentComments = Array.isArray(taskRes?.data?.comments) ? taskRes.data.comments : [];
         } catch {
           // non-fatal: fallback to task-level preview/description heuristics
           recentComments = [];
