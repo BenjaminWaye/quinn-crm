@@ -96,6 +96,11 @@ Attachment behavior for OpenClaw:
 - `listTasks` and `getTask` return task-level `attachments` with `downloadUrl`.
 - `getTask` with `includeComments=true` returns comment attachments in each comment row.
 
+Docs sync behavior (`/api/openclaw/syncDocs`):
+- Text docs: send `content` (`.md`, `.txt`, `.html`) and optional `sourceFile`.
+- Binary/media docs (`.png`, `.pdf`, `.mp3`, `.mp4`, etc): send `downloadUrl` (or `url`) so the dashboard can render/open the asset.
+- `sourceFile` alone is treated as workspace metadata; it is not downloadable unless it is already a full URL.
+
 Example `getTask` request:
 ```json
 {

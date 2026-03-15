@@ -174,6 +174,9 @@ export type OpenClawDoc = {
   name: string;
   type: string; // .md, .html, etc
   content: string;
+  downloadUrl?: string;
+  storagePath?: string;
+  contentType?: string;
   summary?: string;
   tags?: string[];
   sourceFile?: string;

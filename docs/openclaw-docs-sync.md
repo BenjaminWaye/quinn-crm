@@ -22,6 +22,9 @@ Sync OpenClaw-generated documents into the Docs module.
       "name": "2026-02-25-vibe-coding-mainstream.md",
       "type": ".md",
       "content": "Document content...",
+      "downloadUrl": "https://.../optional-for-binary-files.png",
+      "contentType": "text/markdown",
+      "storagePath": "optional/storage/path",
       "summary": "Optional summary",
       "tags": ["journal", "content"],
       "sourceFile": "docs/2026-02-25-vibe-coding-mainstream.md",
@@ -42,6 +45,12 @@ Sync OpenClaw-generated documents into the Docs module.
 - Full snapshot for a given `agentId`:
   - upsert incoming docs
   - delete docs for that `agentId` missing in payload
+
+## Rendering contract
+
+- For text-like docs (`.md`, `.txt`, `.html`), provide `content`.
+- For binary/media docs (`.png`, `.jpg`, `.pdf`, `.mp3`, `.mp4`, etc), provide `downloadUrl` (or `url`) so the dashboard can render/open the file.
+- `sourceFile` is metadata (workspace path) unless it is a full URL.
 
 ## Firestore paths
 

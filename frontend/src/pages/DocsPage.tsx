@@ -20,6 +20,8 @@ function isUrlLike(value: string): boolean {
 function resolveAssetSrc(doc: OpenClawDoc): string | null {
   const content = (doc.content || "").trim();
   if (content && isUrlLike(content)) return content;
+  const downloadUrl = (doc.downloadUrl || "").trim();
+  if (downloadUrl && isUrlLike(downloadUrl)) return downloadUrl;
   const source = (doc.sourceFile || "").trim();
   if (source && isUrlLike(source)) return source;
   return null;
@@ -158,7 +160,7 @@ function DocumentContent({ doc }: { doc: OpenClawDoc | null }) {
   const lowerType = docType.toLowerCase();
 
   if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].includes(lowerType)) {
-    if (!src) return <p className="text-neutral-500 text-sm">Image source missing. Provide a URL/data URI in content or sourceFile.</p>;
+    if (!src) return <p className="text-neutral-500 text-sm">Image source missing. Provide a URL/data URI in content/sourceFile, or include downloadUrl in syncDocs.</p>;
     return (
       <div className="flex items-center justify-center">
         <img src={src} alt={doc.name} className="max-w-full max-h-[70vh] rounded-md border border-[#2a3345]" />
@@ -167,7 +169,7 @@ function DocumentContent({ doc }: { doc: OpenClawDoc | null }) {
   }
 
   if (lowerType === ".pdf") {
-    if (!src) return <p className="text-neutral-500 text-sm">PDF source missing. Provide a URL/data URI in content or sourceFile.</p>;
+    if (!src) return <p className="text-neutral-500 text-sm">PDF source missing. Provide a URL/data URI in content/sourceFile, or include downloadUrl in syncDocs.</p>;
     return (
       <div className="h-[70vh] border border-[#2a3345] rounded-md overflow-hidden bg-[#0c1017]">
         <iframe title={doc.name} src={src} className="w-full h-full" />
@@ -176,7 +178,7 @@ function DocumentContent({ doc }: { doc: OpenClawDoc | null }) {
   }
 
   if ([".mp3", ".wav", ".ogg", ".m4a"].includes(lowerType)) {
-    if (!src) return <p className="text-neutral-500 text-sm">Audio source missing. Provide a URL/data URI in content or sourceFile.</p>;
+    if (!src) return <p className="text-neutral-500 text-sm">Audio source missing. Provide a URL/data URI in content/sourceFile, or include downloadUrl in syncDocs.</p>;
     return (
       <div className="space-y-3">
         <audio controls className="w-full">
@@ -190,7 +192,7 @@ function DocumentContent({ doc }: { doc: OpenClawDoc | null }) {
   }
 
   if ([".mp4", ".webm", ".mov", ".m4v"].includes(lowerType)) {
-    if (!src) return <p className="text-neutral-500 text-sm">Video source missing. Provide a URL/data URI in content or sourceFile.</p>;
+    if (!src) return <p className="text-neutral-500 text-sm">Video source missing. Provide a URL/data URI in content/sourceFile, or include downloadUrl in syncDocs.</p>;
     return (
       <div className="space-y-3">
         <video controls className="w-full max-h-[70vh] rounded-md border border-[#2a3345] bg-black">
