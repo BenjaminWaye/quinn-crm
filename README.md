@@ -55,6 +55,7 @@ Frontend (`frontend/.env`):
 Functions (`functions/.env`):
 - `OWNER_UID`
 - `OPENCLOW_SECRET`
+- `STORAGE_BUCKET` (recommended, e.g. `quinn-dash.firebasestorage.app`)
 
 ## Deploy
 - `firebase deploy --only hosting`

@@ -8,7 +8,24 @@ const db = admin.firestore();
 const storage = admin.storage();
 const eu = functions.region("europe-west1");
 const runtimeConfig = functions.config();
+const firebaseConfigRaw = process.env.FIREBASE_CONFIG ?? "{}";
+const firebaseConfig = (() => {
+  try {
+    return JSON.parse(firebaseConfigRaw) as { projectId?: string };
+  } catch {
+    return {} as { projectId?: string };
+  }
+})();
+const PROJECT_ID =
+  process.env.GCLOUD_PROJECT ??
+  process.env.GCP_PROJECT ??
+  firebaseConfig.projectId ??
+  "";
 const OWNER_UID = process.env.OWNER_UID ?? runtimeConfig?.app?.owner_uid ?? "";
+const STORAGE_BUCKET =
+  process.env.STORAGE_BUCKET ??
+  runtimeConfig?.app?.storage_bucket ??
+  "";
 const OPENCLOW_SECRET =
   process.env.OPENCLOW_SECRET ??
   process.env.OPENCLOW_KEY ??
@@ -121,6 +138,15 @@ function sanitizeFileName(input: string): string {
   return input.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120) || "file";
 }
 
+function getStorageBucketCandidates(): string[] {
+  const candidates = [
+    STORAGE_BUCKET,
+    PROJECT_ID ? `${PROJECT_ID}.firebasestorage.app` : "",
+    PROJECT_ID ? `${PROJECT_ID}.appspot.com` : "",
+  ].filter(Boolean);
+  return Array.from(new Set(candidates));
+}
+
 function parseDataUrl(dataUrl: string): { contentType: string; buffer: Buffer } {
   const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/);
   if (!match) {
@@ -184,16 +210,39 @@ async function uploadTaskAttachment(params: {
 
   const attachmentId = db.collection("_ids").doc().id;
   const storagePath = `task-attachments/${params.productId}/${params.taskId}/${params.scope}/${attachmentId}-${fileName}`;
-  const bucket = storage.bucket();
-  const file = bucket.file(storagePath);
-  await file.save(parsed.buffer, {
-    contentType,
-    resumable: false,
-    metadata: {
-      cacheControl: "private, max-age=31536000",
-    },
-  });
-  const [downloadUrl] = await file.getSignedUrl({ action: "read", expires: "2100-01-01" });
+  const bucketCandidates = getStorageBucketCandidates();
+
+  let downloadUrl = "";
+  let lastError: unknown = null;
+  for (const bucketName of bucketCandidates) {
+    try {
+      const bucket = storage.bucket(bucketName);
+      const file = bucket.file(storagePath);
+      await file.save(parsed.buffer, {
+        contentType,
+        resumable: false,
+        metadata: {
+          cacheControl: "private, max-age=31536000",
+        },
+      });
+      const [signedUrl] = await file.getSignedUrl({ action: "read", expires: "2100-01-01" });
+      downloadUrl = signedUrl;
+      break;
+    } catch (error) {
+      lastError = error;
+      const message = String((error as Error)?.message ?? "");
+      const missingBucket = message.includes("The specified bucket does not exist");
+      if (!missingBucket) {
+        throw error;
+      }
+    }
+  }
+
+  if (!downloadUrl) {
+    throw new Error(
+      `No valid Cloud Storage bucket found. Set STORAGE_BUCKET in Functions config/env. Last error: ${String((lastError as Error)?.message ?? "unknown")}`,
+    );
+  }
 
   return {
     id: attachmentId,
