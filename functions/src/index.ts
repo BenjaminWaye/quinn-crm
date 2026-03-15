@@ -11,9 +11,9 @@ const runtimeConfig = functions.config();
 const firebaseConfigRaw = process.env.FIREBASE_CONFIG ?? "{}";
 const firebaseConfig = (() => {
   try {
-    return JSON.parse(firebaseConfigRaw) as { projectId?: string };
+    return JSON.parse(firebaseConfigRaw) as { projectId?: string; storageBucket?: string };
   } catch {
-    return {} as { projectId?: string };
+    return {} as { projectId?: string; storageBucket?: string };
   }
 })();
 const PROJECT_ID =
@@ -24,6 +24,7 @@ const PROJECT_ID =
 const OWNER_UID = process.env.OWNER_UID ?? runtimeConfig?.app?.owner_uid ?? "";
 const STORAGE_BUCKET =
   process.env.STORAGE_BUCKET ??
+  firebaseConfig.storageBucket ??
   runtimeConfig?.app?.storage_bucket ??
   "";
 const OPENCLOW_SECRET =

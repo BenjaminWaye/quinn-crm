@@ -1,0 +1,12 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isOwner() {
+      return request.auth != null && request.auth.uid == "kPpvp7Q9M7WVUHvrsBTE3HzCAjD2";
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if isOwner();
+    }
+  }
+}
