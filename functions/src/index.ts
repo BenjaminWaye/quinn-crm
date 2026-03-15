@@ -555,6 +555,31 @@ async function updateTaskInternal(input: {
     updatedAt: nowTs(),
   };
 
+  // Guardrail (agent updates): never replace task.description; only append.
+  // This prevents losing large context payloads (e.g., prompt lists) when an agent posts an update.
+  // Owners (humans) may still replace descriptions normally.
+  if (typeof input.patch.description === "string") {
+    const incoming = String(input.patch.description).trim();
+
+    if (input.actorType === "agent") {
+      // If an agent sends an empty string, treat as no-op (do not wipe existing description).
+      if (!incoming) {
+        delete updatePayload.description;
+      } else {
+        const currentDesc = String(currentData.description ?? "").trim();
+        const delimiter = "\n\n---\n\n";
+        const alreadyIncluded = currentDesc.toLowerCase().includes(incoming.toLowerCase());
+
+        updatePayload.description = alreadyIncluded
+          ? currentDesc
+          : (currentDesc ? `${currentDesc}${delimiter}${incoming}` : incoming);
+      }
+    } else {
+      // Owner replaces description as requested.
+      updatePayload.description = incoming;
+    }
+  }
+
   if (typeof input.patch.type === "string") {
     updatePayload.type = assertEnum(input.patch.type, TASK_TYPES, "type");
   }
