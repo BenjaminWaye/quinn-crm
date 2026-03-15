@@ -38,7 +38,13 @@ if (!OPENCLAW_SECRET) {
 }
 
 const API_BASE_URL = (env.API_BASE_URL || 'https://europe-west1-quinn-dash.cloudfunctions.net/api').replace(/\/$/, '');
-const OPENCLAW_API_BASE = `${API_BASE_URL}/api/openclaw`;
+// Prefer documented route, but keep a runtime fallback for deployments still mounted under /api/api/openclaw.
+const OPENCLAW_API_BASE = API_BASE_URL.endsWith('/api')
+  ? `${API_BASE_URL}/openclaw`
+  : `${API_BASE_URL}/api/openclaw`;
+const OPENCLAW_API_BASE_FALLBACK = API_BASE_URL.endsWith('/api')
+  ? `${API_BASE_URL}/api/openclaw`
+  : `${API_BASE_URL}/openclaw`;
 
 const CREATE_TASK_URL = env.CREATE_TASK_URL || `${OPENCLAW_API_BASE}/createTask`;
 const UPDATE_TASK_URL = env.UPDATE_TASK_URL || `${OPENCLAW_API_BASE}/updateTask`;
@@ -132,10 +138,24 @@ async function postJson(url, body) {
   }
   if (!res.ok) {
     const err = new Error(`HTTP ${res.status} ${res.statusText}`);
+    err.status = res.status;
     err.response = json;
     throw err;
   }
   return json;
+}
+
+async function postOpenclaw(path, body) {
+  const primary = `${OPENCLAW_API_BASE}/${path}`;
+  const fallback = `${OPENCLAW_API_BASE_FALLBACK}/${path}`;
+  try {
+    return await postJson(primary, body);
+  } catch (err) {
+    if (err?.status === 404 && fallback !== primary) {
+      return await postJson(fallback, body);
+    }
+    throw err;
+  }
 }
 
 function nowIso() {
@@ -167,7 +187,7 @@ async function cmdPoll(args) {
   let productIds = explicitProductId ? [explicitProductId] : [];
 
   if (productIds.length === 0) {
-    const lp = await postJson(`${OPENCLAW_API_BASE}/listProducts`, {});
+    const lp = await postOpenclaw('listProducts', {});
     const items = Array.isArray(lp?.data?.items) ? lp.data.items : [];
     productIds = items.map((p) => p?.id).filter(Boolean);
     if (productIds.length === 0) {
@@ -177,7 +197,7 @@ async function cmdPoll(args) {
 
   const all = [];
   for (const productId of productIds) {
-    const data = await postJson(`${OPENCLAW_API_BASE}/listTasks`, { productId });
+    const data = await postOpenclaw('listTasks', { productId });
     const tasks = Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.tasks) ? data.tasks : [];
     const summary = {
       at: nowIso(),
@@ -211,7 +231,7 @@ async function cmdPollAndWork(args) {
   let productIds = explicitProductId ? [explicitProductId] : [];
 
   if (productIds.length === 0) {
-    const lp = await postJson(`${OPENCLAW_API_BASE}/listProducts`, {});
+    const lp = await postOpenclaw('listProducts', {});
     const items = Array.isArray(lp?.data?.items) ? lp.data.items : [];
     productIds = items.map((p) => p?.id).filter(Boolean);
     if (productIds.length === 0) {
@@ -221,7 +241,7 @@ async function cmdPollAndWork(args) {
 
   const all = [];
   for (const productId of productIds) {
-    const data = await postJson(`${OPENCLAW_API_BASE}/listTasks`, { productId });
+    const data = await postOpenclaw('listTasks', { productId });
     const tasks = Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.tasks) ? data.tasks : [];
     const summary = {
       at: nowIso(),
@@ -490,7 +510,7 @@ async function cmdListContacts(args) {
   const productId = args.productId || env.DEFAULT_PRODUCT_ID;
   if (!productId) throw new Error('--productId required (or set DEFAULT_PRODUCT_ID)');
   const limit = Number(args.limit || 50);
-  const data = await postJson(`${API_BASE_URL}/openclaw/listContacts`, {
+  const data = await postOpenclaw('listContacts', {
     productId,
     agentId: args.agentId || DEFAULT_AGENT_ID,
     limit,
@@ -516,7 +536,8 @@ async function cmdSyncDocs(args) {
       docs.push({
         id: rel.replace(/[^a-zA-Z0-9._-]/g, '_'),
         name: basename(rel),
-        type: extname(rel).replace('.', '') || 'text',
+        type: extname(rel) || '.txt',
+        contentType: guessContentType(rel),
         sourceFile: rel,
         content,
         summary: content.slice(0, 280),
@@ -536,7 +557,7 @@ async function cmdSyncDocs(args) {
     docs,
   };
 
-  const data = await postJson(`${API_BASE_URL}/openclaw/syncDocs`, body);
+  const data = await postOpenclaw('syncDocs', body);
   console.log(JSON.stringify({ ok: true, action: 'sync-docs', sent: docs.length, response: data }, null, 2));
 }
 
@@ -576,7 +597,9 @@ async function cmdSyncWorkspaceDocs(args) {
       docs.push({
         id: rel.replace(/[^a-zA-Z0-9._-]/g, '_'),
         name: basename(rel),
-        type: ext.replace('.', '') || 'bin',
+        // Force text envelope to avoid backend non-text upload requirements during bulk sync.
+        type: '.txt',
+        contentType: 'text/plain',
         sourceFile: rel,
         content,
         summary,
@@ -590,7 +613,7 @@ async function cmdSyncWorkspaceDocs(args) {
     }
   }
 
-  const data = await postJson(`${API_BASE_URL}/openclaw/syncDocs`, {
+  const data = await postOpenclaw('syncDocs', {
     agentId,
     generatedAt: nowIso(),
     docs,
@@ -645,7 +668,7 @@ async function cmdSyncMemory(args) {
     // optional
   }
 
-  const data = await postJson(`${API_BASE_URL}/openclaw/syncMemory`, {
+  const data = await postOpenclaw('syncMemory', {
     agentId,
     generatedAt: nowIso(),
     longTerm,
@@ -756,12 +779,15 @@ async function cmdSyncSchedules(args) {
     };
   }).filter((j) => j.id);
 
-  const data = await postJson(SYNC_SCHEDULES_URL, {
+  const payload = {
     agentId,
     timezone,
     generatedAt: nowIso(),
     jobs,
-  });
+  };
+  const data = env.SYNC_SCHEDULES_URL
+    ? await postJson(SYNC_SCHEDULES_URL, payload)
+    : await postOpenclaw('syncSchedules', payload);
 
   console.log(JSON.stringify({ ok: true, action: 'sync-schedules', sent: jobs.length, response: data }, null, 2));
 }
@@ -794,3 +820,4 @@ main().catch((err) => {
   if (err.response) console.error(JSON.stringify(err.response, null, 2));
   process.exit(1);
 });
+
