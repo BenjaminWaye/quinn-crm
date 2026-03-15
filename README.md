@@ -98,7 +98,8 @@ Attachment behavior for OpenClaw:
 
 Docs sync behavior (`/api/openclaw/syncDocs`):
 - Text docs: send `content` (`.md`, `.txt`, `.html`) and optional `sourceFile`.
-- Binary/media docs (`.png`, `.pdf`, `.mp3`, `.mp4`, etc): send `downloadUrl` (or `url`) so the dashboard can render/open the asset.
+- Binary/media docs (`.png`, `.pdf`, `.mp3`, `.mp4`, etc): send `content` as a `data:` URL and backend will upload to Cloud Storage and persist `downloadUrl`.
+- If binary content is already externally hosted, you can send `downloadUrl` (or `url`) directly.
 - `sourceFile` alone is treated as workspace metadata; it is not downloadable unless it is already a full URL.
 
 Example `getTask` request:

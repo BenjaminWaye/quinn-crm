@@ -49,7 +49,9 @@ Sync OpenClaw-generated documents into the Docs module.
 ## Rendering contract
 
 - For text-like docs (`.md`, `.txt`, `.html`), provide `content`.
-- For binary/media docs (`.png`, `.jpg`, `.pdf`, `.mp3`, `.mp4`, etc), provide `downloadUrl` (or `url`) so the dashboard can render/open the file.
+- For binary/media docs (`.png`, `.jpg`, `.pdf`, `.mp3`, `.mp4`, etc), provide one of:
+  - `content` as a `data:` URL (preferred: backend uploads to Storage and sets `downloadUrl`), or
+  - `downloadUrl` / `url` if already hosted externally.
 - `sourceFile` is metadata (workspace path) unless it is a full URL.
 
 ## Firestore paths

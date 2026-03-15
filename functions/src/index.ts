@@ -171,6 +171,94 @@ function assertAllowedContentType(contentType: string) {
   throw new Error(`Unsupported attachment content type: ${contentType}`);
 }
 
+function isUrlLike(value: string): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized.startsWith("http://") || normalized.startsWith("https://") || normalized.startsWith("data:");
+}
+
+function isTextDocType(typeRaw: string, contentTypeRaw: string): boolean {
+  const type = String(typeRaw ?? "").trim().toLowerCase();
+  const contentType = String(contentTypeRaw ?? "").trim().toLowerCase();
+  const textExt = new Set([".md", ".txt", ".html", ".htm", ".json", ".csv", ".xml", ".yaml", ".yml"]);
+  if (textExt.has(type)) return true;
+  if (contentType.startsWith("text/")) return true;
+  if (contentType === "application/json" || contentType === "application/xml") return true;
+  return false;
+}
+
+function assertAllowedDocContentType(contentType: string) {
+  if (
+    contentType.startsWith("image/") ||
+    contentType.startsWith("audio/") ||
+    contentType.startsWith("video/") ||
+    contentType.startsWith("text/") ||
+    contentType === "application/pdf" ||
+    contentType === "application/json" ||
+    contentType === "application/xml" ||
+    contentType === "application/octet-stream" ||
+    contentType === "application/zip" ||
+    contentType === "application/x-zip-compressed"
+  ) {
+    return;
+  }
+  throw new Error(`Unsupported document content type: ${contentType}`);
+}
+
+async function uploadOpenClawDocAsset(params: {
+  agentId: string;
+  docId: string;
+  fileName: string;
+  dataUrl: string;
+  contentTypeHint?: string;
+}): Promise<{ downloadUrl: string; storagePath: string; contentType: string; sizeBytes: number }> {
+  const parsed = parseDataUrl(params.dataUrl);
+  const contentType = String(params.contentTypeHint ?? parsed.contentType).toLowerCase();
+  assertAllowedDocContentType(contentType);
+  const sizeBytes = parsed.buffer.byteLength;
+  if (sizeBytes <= 0 || sizeBytes > 20 * 1024 * 1024) {
+    throw new Error("Document asset exceeds 20MB limit");
+  }
+
+  const safeName = sanitizeFileName(params.fileName);
+  const storagePath = `openclaw-docs/${sanitizeFileName(params.agentId)}/${sanitizeFileName(params.docId)}/${Date.now()}-${safeName}`;
+  const bucketCandidates = getStorageBucketCandidates();
+
+  let downloadUrl = "";
+  let lastError: unknown = null;
+
+  for (const bucketName of bucketCandidates) {
+    try {
+      const bucket = storage.bucket(bucketName);
+      const file = bucket.file(storagePath);
+      await file.save(parsed.buffer, {
+        contentType,
+        resumable: false,
+        metadata: {
+          cacheControl: "private, max-age=31536000",
+        },
+      });
+      const [signedUrl] = await file.getSignedUrl({ action: "read", expires: "2100-01-01" });
+      downloadUrl = signedUrl;
+      break;
+    } catch (error) {
+      lastError = error;
+      const message = String((error as Error)?.message ?? "");
+      const missingBucket = message.includes("The specified bucket does not exist");
+      if (!missingBucket) {
+        throw error;
+      }
+    }
+  }
+
+  if (!downloadUrl) {
+    throw new Error(
+      `No valid Cloud Storage bucket found. Set STORAGE_BUCKET in Functions config/env. Last error: ${String((lastError as Error)?.message ?? "unknown")}`,
+    );
+  }
+
+  return { downloadUrl, storagePath, contentType, sizeBytes };
+}
+
 function sanitizeExistingAttachment(input: unknown): TaskAttachment | null {
   if (!input || typeof input !== "object") return null;
   const row = input as Record<string, unknown>;
@@ -1715,8 +1803,44 @@ openclaw.post("/api/openclaw/syncDocs", async (req, res) => {
     for (const rawDoc of docs) {
       const id = requireString(rawDoc?.id, "doc.id", 2, 200);
       const name = requireString(rawDoc?.name, "doc.name", 1, 300);
-      const type = String(rawDoc?.type ?? "unknown");
+      const type = String(rawDoc?.type ?? "unknown").trim();
+      const sourceFile = String(rawDoc?.sourceFile ?? "").trim();
       const content = String(rawDoc?.content ?? "");
+      const contentTypeRaw = String(rawDoc?.contentType ?? "").trim().toLowerCase();
+      const isTextDoc = isTextDocType(type, contentTypeRaw);
+      const hasDataUrlPayload = isUrlLike(content) && content.trim().toLowerCase().startsWith("data:");
+
+      let persistedContent = content;
+      let downloadUrl = String(rawDoc?.downloadUrl ?? rawDoc?.url ?? "").trim();
+      let storagePath = String(rawDoc?.storagePath ?? "").trim();
+      let resolvedContentType = contentTypeRaw;
+      let resolvedSizeBytes = Number(rawDoc?.sizeBytes ?? 0);
+
+      if (!isTextDoc) {
+        if (!downloadUrl && hasDataUrlPayload) {
+          const uploaded = await uploadOpenClawDocAsset({
+            agentId,
+            docId: id,
+            fileName: name,
+            dataUrl: content,
+            contentTypeHint: contentTypeRaw || undefined,
+          });
+          downloadUrl = uploaded.downloadUrl;
+          storagePath = uploaded.storagePath;
+          resolvedContentType = uploaded.contentType;
+          resolvedSizeBytes = uploaded.sizeBytes;
+          persistedContent = "";
+        } else if (!downloadUrl && isUrlLike(sourceFile)) {
+          downloadUrl = sourceFile;
+        }
+      }
+
+      if (!isTextDoc && !downloadUrl) {
+        throw new Error(
+          `syncDocs: non-text doc '${id}' requires either content as data URL or a downloadUrl/url`,
+        );
+      }
+
       incomingIds.add(id);
 
       const linkedTasks: Array<{ productId: string; taskId: string; title: string }> = Array.isArray(rawDoc?.linkedTasks)
@@ -1743,16 +1867,16 @@ openclaw.post("/api/openclaw/syncDocs", async (req, res) => {
           id,
           name,
           type,
-          content,
-          downloadUrl: String(rawDoc?.downloadUrl ?? rawDoc?.url ?? ""),
-          storagePath: String(rawDoc?.storagePath ?? ""),
-          contentType: String(rawDoc?.contentType ?? ""),
+          content: persistedContent,
+          downloadUrl,
+          storagePath,
+          contentType: resolvedContentType,
           summary: String(rawDoc?.summary ?? ""),
           tags: Array.isArray(rawDoc?.tags) ? rawDoc.tags.map((tag: unknown) => String(tag)) : [],
-          sourceFile: String(rawDoc?.sourceFile ?? ""),
+          sourceFile,
           agentId,
           productId: rawDoc?.productId ? String(rawDoc.productId) : null,
-          sizeBytes: Number(rawDoc?.sizeBytes ?? 0),
+          sizeBytes: resolvedSizeBytes,
           wordCount: Number(rawDoc?.wordCount ?? 0),
           modifiedAt: String(rawDoc?.modifiedAt ?? generatedAt),
           syncedAt: generatedAt,
