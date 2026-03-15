@@ -47,14 +47,46 @@ const ARCHIVE_MIME_MARKERS = ["zip", "x-7z", "rar", "tar", "gzip", "x-gzip", "x-
 const STRUCTURED_TEXT_MARKERS = ["json", "xml", "yaml", "yml", "toml", "ini"];
 
 export function attachmentIconLabel(contentType: string): string {
-  const normalized = String(contentType || "").toLowerCase();
+  const normalized = String(contentType || "").trim().toLowerCase();
+
   if (normalized.startsWith("image/")) return "🖼️";
   if (normalized.startsWith("video/")) return "🎬";
   if (normalized.startsWith("audio/")) return "🎵";
+
   if (normalized === "application/pdf") return "📄";
-  if (normalized === "text/csv") return "📊";
+
+  if (
+    normalized === "text/csv"
+    || normalized.includes("spreadsheet")
+    || normalized.includes("excel")
+  ) {
+    return "📊";
+  }
+
   if (OFFICE_DOC_MIME_TYPES.has(normalized)) return "📊";
-  if (ARCHIVE_MIME_MARKERS.some((marker) => normalized.includes(marker))) return "🗜️";
+
+  if (
+    normalized === "application/json"
+    || normalized.endsWith("+json")
+  ) {
+    return "🧾";
+  }
+
+  if (
+    normalized.includes("word")
+    || normalized.includes("officedocument.wordprocessingml")
+  ) {
+    return "📘";
+  }
+
+  if (
+    normalized.includes("presentation")
+    || normalized.includes("powerpoint")
+  ) {
+    return "📽️";
+  }
+
+  if (ARCHIVE_MIME_MARKERS.some((marker) => normalized.includes(marker)) || normalized.includes("compressed")) return "🗜️";
   if (normalized.startsWith("text/")) return "📝";
   if (STRUCTURED_TEXT_MARKERS.some((marker) => normalized.includes(marker))) return "📝";
   return "📎";
