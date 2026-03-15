@@ -259,7 +259,7 @@ export function ProductTasksPage() {
               )}
             </div>
             <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-60" disabled={busy || !title.trim()}>
-              {busy ? "Adding..." : "Add"}
+              {busy ? "Creating task..." : "Create task"}
             </button>
           </form>
         )}
@@ -293,6 +293,7 @@ export function ProductTasksPage() {
                             <span className="text-xs px-2 py-0.5 rounded bg-neutral-100 capitalize">{task.priority}</span>
                             <span className="text-xs px-2 py-0.5 rounded bg-neutral-100">{assignedLabel}</span>
                             <span className="text-xs px-2 py-0.5 rounded bg-neutral-100">{totalComments} comments</span>
+                            <span className="text-xs px-2 py-0.5 rounded bg-neutral-100">{(task.attachments ?? []).length} files</span>
                             {newComments > 0 && <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700">+{newComments} new</span>}
                           </div>
                           <p className="text-[11px] text-neutral-500">Created {formatDateTime(task.createdAt)}</p>
@@ -314,6 +315,7 @@ export function ProductTasksPage() {
                   <th className="px-3 py-2 font-semibold">Priority</th>
                   <th className="px-3 py-2 font-semibold">Assigned</th>
                   <th className="px-3 py-2 font-semibold">Comments</th>
+                  <th className="px-3 py-2 font-semibold">Files</th>
                   <th className="px-3 py-2 font-semibold">Created</th>
                   <th className="px-3 py-2 font-semibold">Updated</th>
                 </tr>
@@ -351,6 +353,7 @@ export function ProductTasksPage() {
                         <span>{totalComments}</span>
                         {newComments > 0 && <span className="ml-2 inline-flex px-2 py-0.5 rounded bg-blue-100 text-blue-700">+{newComments} new</span>}
                       </td>
+                      <td className="px-3 py-3 text-xs">{(task.attachments ?? []).length}</td>
                       <td className="px-3 py-3 text-xs">{formatDateTime(task.createdAt)}</td>
                       <td className="px-3 py-3 text-xs">{formatDateTime(task.updatedAt)}</td>
                     </tr>
@@ -358,7 +361,7 @@ export function ProductTasksPage() {
                 })}
                 {tasks.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-neutral-500">
+                    <td colSpan={8} className="px-3 py-6 text-center text-neutral-500">
                       No tasks yet.
                     </td>
                   </tr>

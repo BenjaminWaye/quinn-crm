@@ -466,6 +466,29 @@ export function ProductTaskPage() {
           <p>updatedAt: {formatDateTime(task.updatedAt)}</p>
           <p>completedAt: {formatDateTime(task.completedAt)}</p>
         </div>
+        <div className="pt-2">
+          <h4 className="text-sm font-semibold text-neutral-800 mb-2">Attached files</h4>
+          {(taskAttachments.length + newTaskAttachments.length) > 0 ? (
+            <div className="space-y-1">
+              {taskAttachments.map((attachment, index) => (
+                <div key={`meta-existing-${attachment.id}-${index}`} className="flex items-center justify-between text-xs border border-neutral-200 rounded px-2 py-1">
+                  <a href={attachment.downloadUrl} target="_blank" rel="noreferrer" className="hover:underline">
+                    {attachmentIconLabel(attachment.contentType)} {attachment.name} • {formatBytes(attachment.sizeBytes)}
+                  </a>
+                </div>
+              ))}
+              {newTaskAttachments.map((attachment, index) => (
+                <div key={`meta-new-${attachment.name}-${index}`} className="flex items-center justify-between text-xs border border-neutral-200 rounded px-2 py-1">
+                  <span>
+                    {attachmentIconLabel(attachment.contentType)} {attachment.name} • {formatBytes(attachment.sizeBytes)} (pending save)
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-neutral-500">No files attached.</p>
+          )}
+        </div>
       </div>
 
       <div className="bg-white border border-neutral-200 rounded-lg p-4 space-y-3">
