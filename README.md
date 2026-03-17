@@ -56,6 +56,12 @@ Functions (`functions/.env`):
 - `OWNER_UID`
 - `OPENCLOW_SECRET`
 - `STORAGE_BUCKET` (recommended, e.g. `quinn-dash.firebasestorage.app`)
+- `LOG_AGENT_RUN_READS` (optional, default `false`)
+- `LOG_AGENT_RUN_SYNCS` (optional, default `false`)
+- `OPENCLOW_SYNC_MIN_INTERVAL_SECONDS` (optional, default `60`)
+- `OPENCLOW_MAX_SYNC_ITEMS` (optional, default `500`)
+- `OPENCLOW_LIST_LIMIT_MAX` (optional, default `50`)
+- `SYNC_DELETE_MISSING` (optional, default `false`; set true only for trusted full snapshots)
 
 ## Deploy
 - `firebase deploy --only hosting`
@@ -101,6 +107,7 @@ Docs sync behavior (`/api/openclaw/syncDocs`):
 - Binary/media docs (`.png`, `.pdf`, `.mp3`, `.mp4`, etc): send `content` as a `data:` URL and backend will upload to Cloud Storage and persist `downloadUrl`.
 - If binary content is already externally hosted, you can send `downloadUrl` (or `url`) directly.
 - `sourceFile` alone is treated as workspace metadata; it is not downloadable unless it is already a full URL.
+- The backend now performs delta sync: unchanged docs are skipped to reduce Firestore writes.
 
 Example `getTask` request:
 ```json

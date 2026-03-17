@@ -1,6 +1,7 @@
 import * as admin from "firebase-admin";
 import * as functions from "firebase-functions";
 import express, { Request, Response } from "express";
+import { createHash } from "crypto";
 
 admin.initializeApp();
 
@@ -33,6 +34,12 @@ const OPENCLOW_SECRET =
   runtimeConfig?.openclaw?.secret ??
   runtimeConfig?.openclow?.secret ??
   "";
+const LOG_AGENT_RUN_READS = String(process.env.LOG_AGENT_RUN_READS ?? "false").toLowerCase() === "true";
+const LOG_AGENT_RUN_SYNCS = String(process.env.LOG_AGENT_RUN_SYNCS ?? "false").toLowerCase() === "true";
+const SYNC_DELETE_MISSING = String(process.env.SYNC_DELETE_MISSING ?? "false").toLowerCase() === "true";
+const OPENCLOW_SYNC_MIN_INTERVAL_SECONDS = Math.max(5, Number(process.env.OPENCLOW_SYNC_MIN_INTERVAL_SECONDS ?? 60));
+const OPENCLOW_MAX_SYNC_ITEMS = Math.max(1, Number(process.env.OPENCLOW_MAX_SYNC_ITEMS ?? 500));
+const OPENCLOW_LIST_LIMIT_MAX = Math.max(1, Number(process.env.OPENCLOW_LIST_LIMIT_MAX ?? 50));
 
 type ActivityType =
   | "product.updated"
@@ -486,7 +493,48 @@ async function writeContactActivity(params: {
   });
 }
 
-async function startAgentRun(params: { productId: string; agentId: string; action: string; inputSummary?: string }) {
+const READ_ONLY_AGENT_ACTIONS = new Set([
+  "listProducts",
+  "getProductOverview",
+  "listTasks",
+  "getTask",
+  "task.comments.list",
+  "listContacts",
+]);
+const lastSyncCallAt = new Map<string, number>();
+
+function shouldLogAgentRun(action: string): boolean {
+  if (action === "summary.write") {
+    return LOG_AGENT_RUN_SYNCS;
+  }
+  if (READ_ONLY_AGENT_ACTIONS.has(action)) {
+    return LOG_AGENT_RUN_READS;
+  }
+  return true;
+}
+
+function assertSyncRateLimit(syncKey: string) {
+  const now = Date.now();
+  const prev = lastSyncCallAt.get(syncKey) ?? 0;
+  const minMs = OPENCLOW_SYNC_MIN_INTERVAL_SECONDS * 1000;
+  if (now - prev < minMs) {
+    throw new Error(`Sync throttled for ${syncKey}. Retry in ${Math.ceil((minMs - (now - prev)) / 1000)}s`);
+  }
+  lastSyncCallAt.set(syncKey, now);
+}
+
+function hashString(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function isSameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+async function startAgentRun(params: { productId: string; agentId: string; action: string; inputSummary?: string }): Promise<FirebaseFirestore.DocumentReference | null> {
+  if (!shouldLogAgentRun(params.action)) {
+    return null;
+  }
   const ref = db.collection(paths.agentRuns).doc();
   await ref.set({
     id: ref.id,
@@ -501,9 +549,12 @@ async function startAgentRun(params: { productId: string; agentId: string; actio
 }
 
 async function finishAgentRun(
-  runRef: FirebaseFirestore.DocumentReference,
+  runRef: FirebaseFirestore.DocumentReference | null,
   result: { status: "success" | "failed"; outputSummary?: string; errorMessage?: string },
 ) {
+  if (!runRef) {
+    return;
+  }
   await runRef.set(
     {
       status: result.status,
@@ -1309,7 +1360,7 @@ openclaw.post("/api/openclaw/listTasks", async (req, res) => {
   const agentId = String(req.body?.agentId ?? "openclaw").trim();
   const requestedStatus = String(req.body?.status ?? "").trim();
   const status = String(normalizeTaskStatusInput(requestedStatus) ?? "").trim();
-  const take = Math.min(Number(req.body?.limit ?? 20), 100);
+  const take = Math.min(Number(req.body?.limit ?? 20), OPENCLOW_LIST_LIMIT_MAX);
 
   if (!productId) {
     res.status(400).json({ ok: false, error: "productId is required" });
@@ -1344,7 +1395,7 @@ openclaw.post("/api/openclaw/getTask", async (req, res) => {
   const requestedProductId = String(req.body?.productId ?? "").trim();
   const agentId = String(req.body?.agentId ?? "openclaw").trim();
   const includeComments = Boolean(req.body?.includeComments);
-  const commentLimit = Math.min(Number(req.body?.commentLimit ?? 20), 100);
+  const commentLimit = Math.min(Number(req.body?.commentLimit ?? 20), OPENCLOW_LIST_LIMIT_MAX);
 
   if (!taskId) {
     res.status(400).json({ ok: false, error: "taskId is required" });
@@ -1504,7 +1555,7 @@ openclaw.post("/api/openclaw/listTaskComments", async (req, res) => {
     const productId = requireString(req.body?.productId, "productId", 2, 120);
     const taskId = requireString(req.body?.taskId, "taskId", 2, 120);
     const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
-    const take = Math.min(Number(req.body?.limit ?? 20), 100);
+    const take = Math.min(Number(req.body?.limit ?? 20), OPENCLOW_LIST_LIMIT_MAX);
 
     run = await startAgentRun({ productId, agentId, action: "task.comments.list" });
 
@@ -1528,7 +1579,7 @@ openclaw.post("/api/openclaw/listTaskComments", async (req, res) => {
 openclaw.post("/api/openclaw/listContacts", async (req, res) => {
   const productId = String(req.body?.productId ?? "").trim();
   const agentId = String(req.body?.agentId ?? "openclaw").trim();
-  const take = Math.min(Number(req.body?.limit ?? 20), 100);
+  const take = Math.min(Number(req.body?.limit ?? 20), OPENCLOW_LIST_LIMIT_MAX);
 
   if (!productId) {
     res.status(400).json({ ok: false, error: "productId is required" });
@@ -1595,9 +1646,11 @@ openclaw.post("/api/openclaw/syncSchedules", async (req, res) => {
   let run: FirebaseFirestore.DocumentReference | null = null;
   try {
     const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+    assertSyncRateLimit(`syncSchedules:${agentId}`);
     const timezone = String(req.body?.timezone ?? "UTC");
     const generatedAt = String(req.body?.generatedAt ?? new Date().toISOString());
-    const jobs = Array.isArray(req.body?.jobs) ? req.body.jobs : [];
+    const jobsRaw = Array.isArray(req.body?.jobs) ? req.body.jobs : [];
+    const jobs = jobsRaw.slice(0, OPENCLOW_MAX_SYNC_ITEMS);
 
     run = await startAgentRun({
       productId: "global",
@@ -1608,8 +1661,10 @@ openclaw.post("/api/openclaw/syncSchedules", async (req, res) => {
 
     const schedulesCol = db.collection("openclaw_schedules");
     const existingSnap = await schedulesCol.where("agentId", "==", agentId).get();
+    const existingById = new Map(existingSnap.docs.map((docSnap) => [docSnap.id, docSnap.data()]));
     const incomingDocIds = new Set<string>();
     const batch = db.batch();
+    let changedCount = 0;
 
     for (const rawJob of jobs) {
       const jobId = requireString(rawJob?.id, "job.id", 2, 120);
@@ -1634,24 +1689,50 @@ openclaw.post("/api/openclaw/syncSchedules", async (req, res) => {
             .filter(Boolean)
         : [];
 
+      const payload = {
+        id: jobId,
+        docId,
+        name,
+        agentId,
+        enabled: rawJob?.enabled !== false,
+        alwaysRunning: Boolean(rawJob?.alwaysRunning),
+        color: String(rawJob?.color ?? ""),
+        timezone: String(rawJob?.timezone ?? timezone),
+        productId: rawJob?.productId ? String(rawJob.productId) : null,
+        scheduleType: String(rawJob?.scheduleType ?? "other"),
+        expression: String(rawJob?.expression ?? ""),
+        tags: Array.isArray(rawJob?.tags) ? rawJob.tags.map((tag: unknown) => String(tag)) : [],
+        weekSlots,
+        nextRuns: Array.isArray(rawJob?.nextRuns) ? rawJob.nextRuns.map((runAt: unknown) => String(runAt)) : [],
+        sourceUpdatedAt: String(rawJob?.sourceUpdatedAt ?? generatedAt),
+      };
+      const existing = existingById.get(docId) ?? null;
+      const unchanged = Boolean(existing) &&
+        isSameJson(payload, {
+          id: existing?.id,
+          docId: existing?.docId,
+          name: existing?.name,
+          agentId: existing?.agentId,
+          enabled: existing?.enabled,
+          alwaysRunning: existing?.alwaysRunning,
+          color: existing?.color,
+          timezone: existing?.timezone,
+          productId: existing?.productId ?? null,
+          scheduleType: existing?.scheduleType,
+          expression: existing?.expression,
+          tags: existing?.tags ?? [],
+          weekSlots: existing?.weekSlots ?? [],
+          nextRuns: existing?.nextRuns ?? [],
+          sourceUpdatedAt: existing?.sourceUpdatedAt,
+        });
+      if (unchanged) {
+        continue;
+      }
+      changedCount += 1;
       batch.set(
         schedulesCol.doc(docId),
         {
-          id: jobId,
-          docId,
-          name,
-          agentId,
-          enabled: rawJob?.enabled !== false,
-          alwaysRunning: Boolean(rawJob?.alwaysRunning),
-          color: String(rawJob?.color ?? ""),
-          timezone: String(rawJob?.timezone ?? timezone),
-          productId: rawJob?.productId ? String(rawJob.productId) : null,
-          scheduleType: String(rawJob?.scheduleType ?? "other"),
-          expression: String(rawJob?.expression ?? ""),
-          tags: Array.isArray(rawJob?.tags) ? rawJob.tags.map((tag: unknown) => String(tag)) : [],
-          weekSlots,
-          nextRuns: Array.isArray(rawJob?.nextRuns) ? rawJob.nextRuns.map((runAt: unknown) => String(runAt)) : [],
-          sourceUpdatedAt: String(rawJob?.sourceUpdatedAt ?? generatedAt),
+          ...payload,
           syncedAt: generatedAt,
           updatedAt: nowTs(),
         },
@@ -1659,9 +1740,12 @@ openclaw.post("/api/openclaw/syncSchedules", async (req, res) => {
       );
     }
 
-    for (const docSnap of existingSnap.docs) {
-      if (!incomingDocIds.has(docSnap.id)) {
-        batch.delete(docSnap.ref);
+    if (SYNC_DELETE_MISSING) {
+      for (const docSnap of existingSnap.docs) {
+        if (!incomingDocIds.has(docSnap.id)) {
+          changedCount += 1;
+          batch.delete(docSnap.ref);
+        }
       }
     }
 
@@ -1673,14 +1757,15 @@ openclaw.post("/api/openclaw/syncSchedules", async (req, res) => {
         generatedAt,
         lastSyncedAt: nowTs(),
         count: jobs.length,
+        changedCount,
       },
       { merge: true },
     );
 
     await batch.commit();
 
-    await finishAgentRun(run, { status: "success", outputSummary: `schedules:${jobs.length}` });
-    res.json({ ok: true, data: { count: jobs.length } });
+    await finishAgentRun(run, { status: "success", outputSummary: `schedules:${jobs.length};changed:${changedCount}` });
+    res.json({ ok: true, data: { count: jobs.length, changedCount, limited: jobsRaw.length > jobs.length } });
   } catch (error) {
     if (run) {
       await finishAgentRun(run, { status: "failed", errorMessage: (error as Error).message });
@@ -1693,8 +1778,10 @@ openclaw.post("/api/openclaw/syncMemory", async (req, res) => {
   let run: FirebaseFirestore.DocumentReference | null = null;
   try {
     const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+    assertSyncRateLimit(`syncMemory:${agentId}`);
     const generatedAt = String(req.body?.generatedAt ?? new Date().toISOString());
-    const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    const entriesRaw = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    const entries = entriesRaw.slice(0, OPENCLOW_MAX_SYNC_ITEMS);
     const longTerm = req.body?.longTerm ?? null;
 
     run = await startAgentRun({
@@ -1706,8 +1793,10 @@ openclaw.post("/api/openclaw/syncMemory", async (req, res) => {
 
     const entriesCol = db.collection("openclaw_memory_entries");
     const existingSnap = await entriesCol.where("agentId", "==", agentId).get();
+    const existingById = new Map(existingSnap.docs.map((docSnap) => [docSnap.id, docSnap.data()]));
     const incomingIds = new Set<string>();
     const batch = db.batch();
+    let changedCount = 0;
 
     for (const rawEntry of entries) {
       const id = requireString(rawEntry?.id, "entry.id", 2, 160);
@@ -1715,48 +1804,91 @@ openclaw.post("/api/openclaw/syncMemory", async (req, res) => {
       const content = requireString(rawEntry?.content, "entry.content", 1, 200000);
       incomingIds.add(id);
 
+      const payload = {
+        id,
+        title,
+        content,
+        summary: String(rawEntry?.summary ?? ""),
+        tags: Array.isArray(rawEntry?.tags) ? rawEntry.tags.map((tag: unknown) => String(tag)) : [],
+        sourceFile: String(rawEntry?.sourceFile ?? ""),
+        agentId,
+        wordCount: Number(rawEntry?.wordCount ?? 0),
+        createdAt: String(rawEntry?.createdAt ?? generatedAt),
+        updatedAt: String(rawEntry?.updatedAt ?? generatedAt),
+      };
+      const existing = existingById.get(id) ?? null;
+      const unchanged = Boolean(existing) &&
+        isSameJson(payload, {
+          id: existing?.id,
+          title: existing?.title,
+          content: existing?.content,
+          summary: existing?.summary ?? "",
+          tags: existing?.tags ?? [],
+          sourceFile: existing?.sourceFile ?? "",
+          agentId: existing?.agentId,
+          wordCount: Number(existing?.wordCount ?? 0),
+          createdAt: String(existing?.createdAt ?? ""),
+          updatedAt: String(existing?.updatedAt ?? ""),
+        });
+      if (unchanged) {
+        continue;
+      }
+      changedCount += 1;
       batch.set(
         entriesCol.doc(id),
         {
-          id,
-          title,
-          content,
-          summary: String(rawEntry?.summary ?? ""),
-          tags: Array.isArray(rawEntry?.tags) ? rawEntry.tags.map((tag: unknown) => String(tag)) : [],
-          sourceFile: String(rawEntry?.sourceFile ?? ""),
-          agentId,
-          wordCount: Number(rawEntry?.wordCount ?? 0),
-          createdAt: String(rawEntry?.createdAt ?? generatedAt),
-          updatedAt: String(rawEntry?.updatedAt ?? generatedAt),
+          ...payload,
           syncedAt: generatedAt,
         },
         { merge: true },
       );
     }
 
-    for (const docSnap of existingSnap.docs) {
-      if (!incomingIds.has(docSnap.id)) {
-        batch.delete(docSnap.ref);
+    if (SYNC_DELETE_MISSING) {
+      for (const docSnap of existingSnap.docs) {
+        if (!incomingIds.has(docSnap.id)) {
+          changedCount += 1;
+          batch.delete(docSnap.ref);
+        }
       }
     }
 
     if (longTerm) {
       const title = requireString(longTerm?.title, "longTerm.title", 2, 240);
       const content = requireString(longTerm?.content, "longTerm.content", 1, 500000);
+      const longTermPayload = {
+        id: "long_term",
+        title,
+        content,
+        sourceFile: String(longTerm?.sourceFile ?? ""),
+        wordCount: Number(longTerm?.wordCount ?? 0),
+        updatedAt: String(longTerm?.updatedAt ?? generatedAt),
+        agentId,
+      };
+      const longTermRef = db.doc("openclaw_memory/long_term");
+      const longTermSnap = await longTermRef.get();
+      const longTermExisting = longTermSnap.exists ? longTermSnap.data() ?? null : null;
+      const longTermUnchanged = Boolean(longTermExisting) &&
+        isSameJson(longTermPayload, {
+          id: longTermExisting?.id,
+          title: longTermExisting?.title,
+          content: longTermExisting?.content,
+          sourceFile: longTermExisting?.sourceFile ?? "",
+          wordCount: Number(longTermExisting?.wordCount ?? 0),
+          updatedAt: String(longTermExisting?.updatedAt ?? ""),
+          agentId: longTermExisting?.agentId,
+        });
+      if (!longTermUnchanged) {
+        changedCount += 1;
       batch.set(
-        db.doc("openclaw_memory/long_term"),
+          longTermRef,
         {
-          id: "long_term",
-          title,
-          content,
-          sourceFile: String(longTerm?.sourceFile ?? ""),
-          wordCount: Number(longTerm?.wordCount ?? 0),
-          updatedAt: String(longTerm?.updatedAt ?? generatedAt),
+            ...longTermPayload,
           syncedAt: generatedAt,
-          agentId,
         },
         { merge: true },
       );
+      }
     }
 
     batch.set(
@@ -1765,14 +1897,15 @@ openclaw.post("/api/openclaw/syncMemory", async (req, res) => {
         agentId,
         generatedAt,
         count: entries.length,
+        changedCount,
         lastSyncedAt: nowTs(),
       },
       { merge: true },
     );
 
     await batch.commit();
-    await finishAgentRun(run, { status: "success", outputSummary: `memory:${entries.length}` });
-    res.json({ ok: true, data: { count: entries.length } });
+    await finishAgentRun(run, { status: "success", outputSummary: `memory:${entries.length};changed:${changedCount}` });
+    res.json({ ok: true, data: { count: entries.length, changedCount, limited: entriesRaw.length > entries.length } });
   } catch (error) {
     if (run) {
       await finishAgentRun(run, { status: "failed", errorMessage: (error as Error).message });
@@ -1785,8 +1918,10 @@ openclaw.post("/api/openclaw/syncDocs", async (req, res) => {
   let run: FirebaseFirestore.DocumentReference | null = null;
   try {
     const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+    assertSyncRateLimit(`syncDocs:${agentId}`);
     const generatedAt = String(req.body?.generatedAt ?? new Date().toISOString());
-    const docs = Array.isArray(req.body?.docs) ? req.body.docs : [];
+    const docsRaw = Array.isArray(req.body?.docs) ? req.body.docs : [];
+    const docs = docsRaw.slice(0, OPENCLOW_MAX_SYNC_ITEMS);
 
     run = await startAgentRun({
       productId: "global",
@@ -1797,8 +1932,10 @@ openclaw.post("/api/openclaw/syncDocs", async (req, res) => {
 
     const docsCol = db.collection(paths.openclawDocs);
     const existingSnap = await docsCol.where("agentId", "==", agentId).get();
+    const existingById = new Map(existingSnap.docs.map((docSnap) => [docSnap.id, docSnap.data()]));
     const incomingIds = new Set<string>();
     const batch = db.batch();
+    let changedCount = 0;
 
     for (const rawDoc of docs) {
       const id = requireString(rawDoc?.id, "doc.id", 2, 200);
@@ -1809,6 +1946,8 @@ openclaw.post("/api/openclaw/syncDocs", async (req, res) => {
       const contentTypeRaw = String(rawDoc?.contentType ?? "").trim().toLowerCase();
       const isTextDoc = isTextDocType(type, contentTypeRaw);
       const hasDataUrlPayload = isUrlLike(content) && content.trim().toLowerCase().startsWith("data:");
+      const contentHash = hashString(content);
+      const existing = existingById.get(id) ?? null;
 
       let persistedContent = content;
       let downloadUrl = String(rawDoc?.downloadUrl ?? rawDoc?.url ?? "").trim();
@@ -1818,18 +1957,31 @@ openclaw.post("/api/openclaw/syncDocs", async (req, res) => {
 
       if (!isTextDoc) {
         if (!downloadUrl && hasDataUrlPayload) {
-          const uploaded = await uploadOpenClawDocAsset({
-            agentId,
-            docId: id,
-            fileName: name,
-            dataUrl: content,
-            contentTypeHint: contentTypeRaw || undefined,
-          });
-          downloadUrl = uploaded.downloadUrl;
-          storagePath = uploaded.storagePath;
-          resolvedContentType = uploaded.contentType;
-          resolvedSizeBytes = uploaded.sizeBytes;
-          persistedContent = "";
+          const canReuseExisting = Boolean(
+            existing &&
+              String(existing.contentHash ?? "") === contentHash &&
+              String(existing.downloadUrl ?? "").trim(),
+          );
+          if (canReuseExisting) {
+            downloadUrl = String(existing?.downloadUrl ?? "").trim();
+            storagePath = String(existing?.storagePath ?? "").trim();
+            resolvedContentType = String(existing?.contentType ?? contentTypeRaw).trim().toLowerCase();
+            resolvedSizeBytes = Number(existing?.sizeBytes ?? resolvedSizeBytes);
+            persistedContent = "";
+          } else {
+            const uploaded = await uploadOpenClawDocAsset({
+              agentId,
+              docId: id,
+              fileName: name,
+              dataUrl: content,
+              contentTypeHint: contentTypeRaw || undefined,
+            });
+            downloadUrl = uploaded.downloadUrl;
+            storagePath = uploaded.storagePath;
+            resolvedContentType = uploaded.contentType;
+            resolvedSizeBytes = uploaded.sizeBytes;
+            persistedContent = "";
+          }
         } else if (!downloadUrl && isUrlLike(sourceFile)) {
           downloadUrl = sourceFile;
         }
@@ -1860,37 +2012,68 @@ openclaw.post("/api/openclaw/syncDocs", async (req, res) => {
         : [];
 
       const linkedTaskKeys = linkedTasks.map((item: { productId: string; taskId: string }) => `${item.productId}:${item.taskId}`);
-
+      const payload = {
+        id,
+        name,
+        type,
+        content: persistedContent,
+        downloadUrl,
+        storagePath,
+        contentType: resolvedContentType,
+        summary: String(rawDoc?.summary ?? ""),
+        tags: Array.isArray(rawDoc?.tags) ? rawDoc.tags.map((tag: unknown) => String(tag)) : [],
+        sourceFile,
+        agentId,
+        productId: rawDoc?.productId ? String(rawDoc.productId) : null,
+        sizeBytes: resolvedSizeBytes,
+        wordCount: Number(rawDoc?.wordCount ?? 0),
+        modifiedAt: String(rawDoc?.modifiedAt ?? generatedAt),
+        linkedTaskKeys,
+        linkedTasks,
+        contentHash,
+      };
+      const unchanged = Boolean(existing) &&
+        isSameJson(payload, {
+          id: existing?.id,
+          name: existing?.name,
+          type: existing?.type,
+          content: existing?.content ?? "",
+          downloadUrl: existing?.downloadUrl ?? "",
+          storagePath: existing?.storagePath ?? "",
+          contentType: existing?.contentType ?? "",
+          summary: existing?.summary ?? "",
+          tags: existing?.tags ?? [],
+          sourceFile: existing?.sourceFile ?? "",
+          agentId: existing?.agentId,
+          productId: existing?.productId ?? null,
+          sizeBytes: Number(existing?.sizeBytes ?? 0),
+          wordCount: Number(existing?.wordCount ?? 0),
+          modifiedAt: String(existing?.modifiedAt ?? ""),
+          linkedTaskKeys: existing?.linkedTaskKeys ?? [],
+          linkedTasks: existing?.linkedTasks ?? [],
+          contentHash: existing?.contentHash ?? "",
+        });
+      if (unchanged) {
+        continue;
+      }
+      changedCount += 1;
       batch.set(
         docsCol.doc(id),
         {
-          id,
-          name,
-          type,
-          content: persistedContent,
-          downloadUrl,
-          storagePath,
-          contentType: resolvedContentType,
-          summary: String(rawDoc?.summary ?? ""),
-          tags: Array.isArray(rawDoc?.tags) ? rawDoc.tags.map((tag: unknown) => String(tag)) : [],
-          sourceFile,
-          agentId,
-          productId: rawDoc?.productId ? String(rawDoc.productId) : null,
-          sizeBytes: resolvedSizeBytes,
-          wordCount: Number(rawDoc?.wordCount ?? 0),
-          modifiedAt: String(rawDoc?.modifiedAt ?? generatedAt),
+          ...payload,
           syncedAt: generatedAt,
-          linkedTaskKeys,
-          linkedTasks,
           updatedAt: nowTs(),
         },
         { merge: true },
       );
     }
 
-    for (const docSnap of existingSnap.docs) {
-      if (!incomingIds.has(docSnap.id)) {
-        batch.delete(docSnap.ref);
+    if (SYNC_DELETE_MISSING) {
+      for (const docSnap of existingSnap.docs) {
+        if (!incomingIds.has(docSnap.id)) {
+          changedCount += 1;
+          batch.delete(docSnap.ref);
+        }
       }
     }
 
@@ -1900,14 +2083,15 @@ openclaw.post("/api/openclaw/syncDocs", async (req, res) => {
         agentId,
         generatedAt,
         count: docs.length,
+        changedCount,
         lastSyncedAt: nowTs(),
       },
       { merge: true },
     );
 
     await batch.commit();
-    await finishAgentRun(run, { status: "success", outputSummary: `docs:${docs.length}` });
-    res.json({ ok: true, data: { count: docs.length } });
+    await finishAgentRun(run, { status: "success", outputSummary: `docs:${docs.length};changed:${changedCount}` });
+    res.json({ ok: true, data: { count: docs.length, changedCount, limited: docsRaw.length > docs.length } });
   } catch (error) {
     if (run) {
       await finishAgentRun(run, { status: "failed", errorMessage: (error as Error).message });
@@ -1920,8 +2104,10 @@ openclaw.post("/api/openclaw/syncTeam", async (req, res) => {
   let run: FirebaseFirestore.DocumentReference | null = null;
   try {
     const sourceId = requireString(req.body?.sourceId ?? req.body?.agentId, "sourceId", 2, 120);
+    assertSyncRateLimit(`syncTeam:${sourceId}`);
     const generatedAt = String(req.body?.generatedAt ?? new Date().toISOString());
-    const agents = Array.isArray(req.body?.agents) ? req.body.agents : [];
+    const agentsRaw = Array.isArray(req.body?.agents) ? req.body.agents : [];
+    const agents = agentsRaw.slice(0, OPENCLOW_MAX_SYNC_ITEMS);
 
     run = await startAgentRun({
       productId: "global",
@@ -1932,8 +2118,10 @@ openclaw.post("/api/openclaw/syncTeam", async (req, res) => {
 
     const col = db.collection("openclaw_agents");
     const existingSnap = await col.where("syncSource", "==", sourceId).get();
+    const existingById = new Map(existingSnap.docs.map((docSnap) => [docSnap.id, docSnap.data()]));
     const incomingIds = new Set<string>();
     const batch = db.batch();
+    let changedCount = 0;
 
     for (const raw of agents) {
       const id = requireString(raw?.id, "agent.id", 2, 120);
@@ -1942,20 +2130,42 @@ openclaw.post("/api/openclaw/syncTeam", async (req, res) => {
       const description = String(raw?.description ?? "");
       incomingIds.add(id);
 
+      const payload = {
+        id,
+        name,
+        role,
+        description,
+        parentId: raw?.parentId ? String(raw.parentId) : null,
+        machine: String(raw?.machine ?? ""),
+        status: String(raw?.status ?? "active"),
+        tags: Array.isArray(raw?.tags) ? raw.tags.map((tag: unknown) => String(tag)) : [],
+        avatar: String(raw?.avatar ?? ""),
+        order: Number(raw?.order ?? 0),
+        syncSource: sourceId,
+      };
+      const existing = existingById.get(id) ?? null;
+      const unchanged = Boolean(existing) &&
+        isSameJson(payload, {
+          id: existing?.id,
+          name: existing?.name,
+          role: existing?.role,
+          description: existing?.description ?? "",
+          parentId: existing?.parentId ?? null,
+          machine: existing?.machine ?? "",
+          status: existing?.status ?? "active",
+          tags: existing?.tags ?? [],
+          avatar: existing?.avatar ?? "",
+          order: Number(existing?.order ?? 0),
+          syncSource: existing?.syncSource,
+        });
+      if (unchanged) {
+        continue;
+      }
+      changedCount += 1;
       batch.set(
         col.doc(id),
         {
-          id,
-          name,
-          role,
-          description,
-          parentId: raw?.parentId ? String(raw.parentId) : null,
-          machine: String(raw?.machine ?? ""),
-          status: String(raw?.status ?? "active"),
-          tags: Array.isArray(raw?.tags) ? raw.tags.map((tag: unknown) => String(tag)) : [],
-          avatar: String(raw?.avatar ?? ""),
-          order: Number(raw?.order ?? 0),
-          syncSource: sourceId,
+          ...payload,
           syncedAt: generatedAt,
           updatedAt: nowTs(),
         },
@@ -1963,9 +2173,12 @@ openclaw.post("/api/openclaw/syncTeam", async (req, res) => {
       );
     }
 
-    for (const docSnap of existingSnap.docs) {
-      if (!incomingIds.has(docSnap.id)) {
-        batch.delete(docSnap.ref);
+    if (SYNC_DELETE_MISSING) {
+      for (const docSnap of existingSnap.docs) {
+        if (!incomingIds.has(docSnap.id)) {
+          changedCount += 1;
+          batch.delete(docSnap.ref);
+        }
       }
     }
 
@@ -1975,14 +2188,15 @@ openclaw.post("/api/openclaw/syncTeam", async (req, res) => {
         sourceId,
         generatedAt,
         count: agents.length,
+        changedCount,
         lastSyncedAt: nowTs(),
       },
       { merge: true },
     );
 
     await batch.commit();
-    await finishAgentRun(run, { status: "success", outputSummary: `team:${agents.length}` });
-    res.json({ ok: true, data: { count: agents.length } });
+    await finishAgentRun(run, { status: "success", outputSummary: `team:${agents.length};changed:${changedCount}` });
+    res.json({ ok: true, data: { count: agents.length, changedCount, limited: agentsRaw.length > agents.length } });
   } catch (error) {
     if (run) {
       await finishAgentRun(run, { status: "failed", errorMessage: (error as Error).message });
