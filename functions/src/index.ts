@@ -314,15 +314,34 @@ async function uploadTaskAttachment(params: {
     try {
       const bucket = storage.bucket(bucketName);
       const file = bucket.file(storagePath);
+      const downloadToken = db.collection("_ids").doc().id;
+
       await file.save(parsed.buffer, {
         contentType,
         resumable: false,
         metadata: {
           cacheControl: "private, max-age=31536000",
+          // Token-based download URL fallback when signBlob (signed URLs) is unavailable.
+          metadata: {
+            firebaseStorageDownloadTokens: downloadToken,
+          },
         },
       });
-      const [signedUrl] = await file.getSignedUrl({ action: "read", expires: "2100-01-01" });
-      downloadUrl = signedUrl;
+
+      // Prefer signed URL when available.
+      try {
+        const [signedUrl] = await file.getSignedUrl({ action: "read", expires: "2100-01-01" });
+        if (signedUrl) {
+          downloadUrl = signedUrl;
+        }
+      } catch {
+        // ignore; fall back to token URL below
+      }
+
+      if (!downloadUrl) {
+        downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${downloadToken}`;
+      }
+
       break;
     } catch (error) {
       lastError = error;
