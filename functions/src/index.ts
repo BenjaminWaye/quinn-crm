@@ -1,5 +1,5 @@
 import * as admin from "firebase-admin";
-import * as functions from "firebase-functions";
+import * as functions from "firebase-functions/v1";
 import express, { Request, Response } from "express";
 import { createHash } from "crypto";
 
@@ -8,7 +8,6 @@ admin.initializeApp();
 const db = admin.firestore();
 const storage = admin.storage();
 const eu = functions.region("europe-west1");
-const runtimeConfig = functions.config();
 const firebaseConfigRaw = process.env.FIREBASE_CONFIG ?? "{}";
 const firebaseConfig = (() => {
   try {
@@ -22,17 +21,15 @@ const PROJECT_ID =
   process.env.GCP_PROJECT ??
   firebaseConfig.projectId ??
   "";
-const OWNER_UID = process.env.OWNER_UID ?? runtimeConfig?.app?.owner_uid ?? "";
+const OWNER_UID = process.env.OWNER_UID ?? "kPpvp7Q9M7WVUHvrsBTE3HzCAjD2";
 const STORAGE_BUCKET =
   process.env.STORAGE_BUCKET ??
   firebaseConfig.storageBucket ??
-  runtimeConfig?.app?.storage_bucket ??
   "";
 const OPENCLOW_SECRET =
   process.env.OPENCLOW_SECRET ??
+  process.env.OPENCLAW_SECRET ??
   process.env.OPENCLOW_KEY ??
-  runtimeConfig?.openclaw?.secret ??
-  runtimeConfig?.openclow?.secret ??
   "";
 const LOG_AGENT_RUN_READS = String(process.env.LOG_AGENT_RUN_READS ?? "false").toLowerCase() === "true";
 const LOG_AGENT_RUN_SYNCS = String(process.env.LOG_AGENT_RUN_SYNCS ?? "false").toLowerCase() === "true";
@@ -259,7 +256,7 @@ async function uploadOpenClawDocAsset(params: {
 
   if (!downloadUrl) {
     throw new Error(
-      `No valid Cloud Storage bucket found. Set STORAGE_BUCKET in Functions config/env. Last error: ${String((lastError as Error)?.message ?? "unknown")}`,
+      `No valid Cloud Storage bucket found. Set STORAGE_BUCKET env var (or FIREBASE_CONFIG.storageBucket). Last error: ${String((lastError as Error)?.message ?? "unknown")}`,
     );
   }
 
@@ -336,7 +333,7 @@ async function uploadTaskAttachment(params: {
 
   if (!downloadUrl) {
     throw new Error(
-      `No valid Cloud Storage bucket found. Set STORAGE_BUCKET in Functions config/env. Last error: ${String((lastError as Error)?.message ?? "unknown")}`,
+      `No valid Cloud Storage bucket found. Set STORAGE_BUCKET env var (or FIREBASE_CONFIG.storageBucket). Last error: ${String((lastError as Error)?.message ?? "unknown")}`,
     );
   }
 

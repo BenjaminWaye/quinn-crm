@@ -54,7 +54,7 @@ Frontend (`frontend/.env`):
 
 Functions (`functions/.env`):
 - `OWNER_UID`
-- `OPENCLOW_SECRET`
+- `OPENCLOW_SECRET` (or `OPENCLAW_SECRET`)
 - `STORAGE_BUCKET` (recommended, e.g. `quinn-dash.firebasestorage.app`)
 - `LOG_AGENT_RUN_READS` (optional, default `false`)
 - `LOG_AGENT_RUN_SYNCS` (optional, default `false`)
@@ -62,6 +62,8 @@ Functions (`functions/.env`):
 - `OPENCLOW_MAX_SYNC_ITEMS` (optional, default `500`)
 - `OPENCLOW_LIST_LIMIT_MAX` (optional, default `50`)
 - `SYNC_DELETE_MISSING` (optional, default `false`; set true only for trusted full snapshots)
+
+Note: `functions.config()` / Runtime Config is no longer used.
 
 ## Deploy
 - `firebase deploy --only hosting`

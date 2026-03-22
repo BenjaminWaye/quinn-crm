@@ -1,0 +1,1894 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.api = exports.addKpiEntry = exports.createKpi = exports.addTaskComment = exports.deleteTask = exports.updateTask = exports.createTask = exports.deleteContact = exports.updateContact = exports.createContact = exports.updateProduct = exports.createProduct = void 0;
+const admin = __importStar(require("firebase-admin"));
+const functions = __importStar(require("firebase-functions/v1"));
+const express_1 = __importDefault(require("express"));
+const crypto_1 = require("crypto");
+admin.initializeApp();
+const db = admin.firestore();
+const storage = admin.storage();
+const eu = functions.region("europe-west1");
+const firebaseConfigRaw = process.env.FIREBASE_CONFIG ?? "{}";
+const firebaseConfig = (() => {
+    try {
+        return JSON.parse(firebaseConfigRaw);
+    }
+    catch {
+        return {};
+    }
+})();
+const PROJECT_ID = process.env.GCLOUD_PROJECT ??
+    process.env.GCP_PROJECT ??
+    firebaseConfig.projectId ??
+    "";
+const OWNER_UID = process.env.OWNER_UID ?? "kPpvp7Q9M7WVUHvrsBTE3HzCAjD2";
+const STORAGE_BUCKET = process.env.STORAGE_BUCKET ??
+    firebaseConfig.storageBucket ??
+    "";
+const OPENCLOW_SECRET = process.env.OPENCLOW_SECRET ??
+    process.env.OPENCLAW_SECRET ??
+    process.env.OPENCLOW_KEY ??
+    "";
+const LOG_AGENT_RUN_READS = String(process.env.LOG_AGENT_RUN_READS ?? "false").toLowerCase() === "true";
+const LOG_AGENT_RUN_SYNCS = String(process.env.LOG_AGENT_RUN_SYNCS ?? "false").toLowerCase() === "true";
+const SYNC_DELETE_MISSING = String(process.env.SYNC_DELETE_MISSING ?? "false").toLowerCase() === "true";
+const OPENCLOW_SYNC_MIN_INTERVAL_SECONDS = Math.max(5, Number(process.env.OPENCLOW_SYNC_MIN_INTERVAL_SECONDS ?? 60));
+const OPENCLOW_MAX_SYNC_ITEMS = Math.max(1, Number(process.env.OPENCLOW_MAX_SYNC_ITEMS ?? 500));
+const OPENCLOW_LIST_LIMIT_MAX = Math.max(1, Number(process.env.OPENCLOW_LIST_LIMIT_MAX ?? 50));
+const TASK_STATUSES = ["backlog", "in_progress", "blocked", "review", "done"];
+const TASK_PRIORITIES = ["low", "medium", "high", "urgent"];
+const TASK_TYPES = ["dev", "outreach", "content", "seo", "design", "research", "admin", "bug", "other"];
+const CONTACT_STATUSES = ["new", "contacted", "interested", "follow_up", "customer", "inactive"];
+const CONTACT_KINDS = ["lead", "customer", "partner", "investor", "vendor", "other"];
+const paths = {
+    product: (productId) => `products/${productId}`,
+    contacts: (productId) => `products/${productId}/contacts`,
+    contact: (productId, contactId) => `products/${productId}/contacts/${contactId}`,
+    contactActivity: (productId, contactId) => `products/${productId}/contacts/${contactId}/activity`,
+    tasks: (productId) => `products/${productId}/tasks`,
+    task: (productId, taskId) => `products/${productId}/tasks/${taskId}`,
+    taskComments: (productId, taskId) => `products/${productId}/tasks/${taskId}/comments`,
+    kpis: (productId) => `products/${productId}/kpis`,
+    kpi: (productId, key) => `products/${productId}/kpis/${key}`,
+    kpiEntries: (productId, key) => `products/${productId}/kpis/${key}/entries`,
+    activity: (productId) => `products/${productId}/activity`,
+    settings: (productId) => `products/${productId}/settings/config`,
+    agentRuns: "agent_runs",
+    openclawDocs: "openclaw_docs",
+};
+function nowTs() {
+    return admin.firestore.FieldValue.serverTimestamp();
+}
+function requireOwner(context) {
+    if (!context.auth?.uid) {
+        throw new functions.https.HttpsError("unauthenticated", "Sign-in required");
+    }
+    if (!OWNER_UID) {
+        throw new functions.https.HttpsError("failed-precondition", "OWNER_UID is not configured on the server");
+    }
+    if (context.auth.uid !== OWNER_UID) {
+        throw new functions.https.HttpsError("permission-denied", "Owner access required");
+    }
+    return context.auth.uid;
+}
+function assertOpenClawSecret(req, res) {
+    if (!OPENCLOW_SECRET) {
+        res.status(500).json({ ok: false, error: "Server secret not configured" });
+        return false;
+    }
+    const header = req.header("x-openclaw-key");
+    if (!header || header !== OPENCLOW_SECRET) {
+        res.status(401).json({ ok: false, error: "Invalid OpenClaw secret" });
+        return false;
+    }
+    return true;
+}
+function slugify(input) {
+    return input
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 64);
+}
+function sanitizeFileName(input) {
+    return input.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120) || "file";
+}
+function getStorageBucketCandidates() {
+    const candidates = [
+        STORAGE_BUCKET,
+        PROJECT_ID ? `${PROJECT_ID}.firebasestorage.app` : "",
+        PROJECT_ID ? `${PROJECT_ID}.appspot.com` : "",
+    ].filter(Boolean);
+    return Array.from(new Set(candidates));
+}
+function parseDataUrl(dataUrl) {
+    const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/);
+    if (!match) {
+        throw new Error("Invalid attachment data URL");
+    }
+    const contentType = String(match[1] ?? "application/octet-stream").toLowerCase();
+    const buffer = Buffer.from(match[2], "base64");
+    return { contentType, buffer };
+}
+function assertAllowedContentType(contentType) {
+    if (contentType.startsWith("image/") ||
+        contentType === "application/pdf" ||
+        contentType.startsWith("text/") ||
+        contentType === "application/zip" ||
+        contentType === "application/x-zip-compressed") {
+        return;
+    }
+    throw new Error(`Unsupported attachment content type: ${contentType}`);
+}
+function isUrlLike(value) {
+    const normalized = String(value ?? "").trim().toLowerCase();
+    return normalized.startsWith("http://") || normalized.startsWith("https://") || normalized.startsWith("data:");
+}
+function isTextDocType(typeRaw, contentTypeRaw) {
+    const type = String(typeRaw ?? "").trim().toLowerCase();
+    const contentType = String(contentTypeRaw ?? "").trim().toLowerCase();
+    const textExt = new Set([".md", ".txt", ".html", ".htm", ".json", ".csv", ".xml", ".yaml", ".yml"]);
+    if (textExt.has(type))
+        return true;
+    if (contentType.startsWith("text/"))
+        return true;
+    if (contentType === "application/json" || contentType === "application/xml")
+        return true;
+    return false;
+}
+function assertAllowedDocContentType(contentType) {
+    if (contentType.startsWith("image/") ||
+        contentType.startsWith("audio/") ||
+        contentType.startsWith("video/") ||
+        contentType.startsWith("text/") ||
+        contentType === "application/pdf" ||
+        contentType === "application/json" ||
+        contentType === "application/xml" ||
+        contentType === "application/octet-stream" ||
+        contentType === "application/zip" ||
+        contentType === "application/x-zip-compressed") {
+        return;
+    }
+    throw new Error(`Unsupported document content type: ${contentType}`);
+}
+async function uploadOpenClawDocAsset(params) {
+    const parsed = parseDataUrl(params.dataUrl);
+    const contentType = String(params.contentTypeHint ?? parsed.contentType).toLowerCase();
+    assertAllowedDocContentType(contentType);
+    const sizeBytes = parsed.buffer.byteLength;
+    if (sizeBytes <= 0 || sizeBytes > 20 * 1024 * 1024) {
+        throw new Error("Document asset exceeds 20MB limit");
+    }
+    const safeName = sanitizeFileName(params.fileName);
+    const storagePath = `openclaw-docs/${sanitizeFileName(params.agentId)}/${sanitizeFileName(params.docId)}/${Date.now()}-${safeName}`;
+    const bucketCandidates = getStorageBucketCandidates();
+    let downloadUrl = "";
+    let lastError = null;
+    for (const bucketName of bucketCandidates) {
+        try {
+            const bucket = storage.bucket(bucketName);
+            const file = bucket.file(storagePath);
+            await file.save(parsed.buffer, {
+                contentType,
+                resumable: false,
+                metadata: {
+                    cacheControl: "private, max-age=31536000",
+                },
+            });
+            const [signedUrl] = await file.getSignedUrl({ action: "read", expires: "2100-01-01" });
+            downloadUrl = signedUrl;
+            break;
+        }
+        catch (error) {
+            lastError = error;
+            const message = String(error?.message ?? "");
+            const missingBucket = message.includes("The specified bucket does not exist");
+            if (!missingBucket) {
+                throw error;
+            }
+        }
+    }
+    if (!downloadUrl) {
+        throw new Error(`No valid Cloud Storage bucket found. Set STORAGE_BUCKET env var (or FIREBASE_CONFIG.storageBucket). Last error: ${String(lastError?.message ?? "unknown")}`);
+    }
+    return { downloadUrl, storagePath, contentType, sizeBytes };
+}
+function sanitizeExistingAttachment(input) {
+    if (!input || typeof input !== "object")
+        return null;
+    const row = input;
+    const id = String(row.id ?? "").trim();
+    const name = String(row.name ?? "").trim();
+    const contentType = String(row.contentType ?? "").trim().toLowerCase();
+    const storagePath = String(row.storagePath ?? "").trim();
+    const downloadUrl = String(row.downloadUrl ?? "").trim();
+    const sizeBytes = Number(row.sizeBytes ?? 0);
+    if (!id || !name || !contentType || !storagePath || !downloadUrl)
+        return null;
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || sizeBytes > 8 * 1024 * 1024)
+        return null;
+    return {
+        id,
+        name: sanitizeFileName(name),
+        contentType,
+        sizeBytes,
+        storagePath,
+        downloadUrl,
+    };
+}
+async function uploadTaskAttachment(params) {
+    const dataUrl = String(params.upload.dataUrl ?? "").trim();
+    const fileName = sanitizeFileName(String(params.upload.name ?? "attachment"));
+    if (!dataUrl)
+        throw new Error("Attachment data is required");
+    const parsed = parseDataUrl(dataUrl);
+    const contentType = String(params.upload.contentType ?? parsed.contentType).toLowerCase();
+    assertAllowedContentType(contentType);
+    const sizeBytes = parsed.buffer.byteLength;
+    if (sizeBytes <= 0 || sizeBytes > 8 * 1024 * 1024) {
+        throw new Error("Attachment exceeds 8MB limit");
+    }
+    const attachmentId = db.collection("_ids").doc().id;
+    const storagePath = `task-attachments/${params.productId}/${params.taskId}/${params.scope}/${attachmentId}-${fileName}`;
+    const bucketCandidates = getStorageBucketCandidates();
+    let downloadUrl = "";
+    let lastError = null;
+    for (const bucketName of bucketCandidates) {
+        try {
+            const bucket = storage.bucket(bucketName);
+            const file = bucket.file(storagePath);
+            await file.save(parsed.buffer, {
+                contentType,
+                resumable: false,
+                metadata: {
+                    cacheControl: "private, max-age=31536000",
+                },
+            });
+            const [signedUrl] = await file.getSignedUrl({ action: "read", expires: "2100-01-01" });
+            downloadUrl = signedUrl;
+            break;
+        }
+        catch (error) {
+            lastError = error;
+            const message = String(error?.message ?? "");
+            const missingBucket = message.includes("The specified bucket does not exist");
+            if (!missingBucket) {
+                throw error;
+            }
+        }
+    }
+    if (!downloadUrl) {
+        throw new Error(`No valid Cloud Storage bucket found. Set STORAGE_BUCKET env var (or FIREBASE_CONFIG.storageBucket). Last error: ${String(lastError?.message ?? "unknown")}`);
+    }
+    return {
+        id: attachmentId,
+        name: fileName,
+        contentType,
+        sizeBytes,
+        storagePath,
+        downloadUrl,
+    };
+}
+async function resolveProductId(input) {
+    const raw = input.trim();
+    if (!raw)
+        return raw;
+    // Fast path: already a valid product document id.
+    const direct = await db.doc(paths.product(raw)).get();
+    if (direct.exists)
+        return raw;
+    const normalized = slugify(raw);
+    if (normalized) {
+        const normalizedDoc = await db.doc(paths.product(normalized)).get();
+        if (normalizedDoc.exists)
+            return normalized;
+        const bySlug = await db.collection("products").where("slug", "==", normalized).limit(1).get();
+        if (!bySlug.empty)
+            return bySlug.docs[0].id;
+    }
+    const byExactName = await db.collection("products").where("name", "==", raw).limit(1).get();
+    if (!byExactName.empty)
+        return byExactName.docs[0].id;
+    return raw;
+}
+function requireString(value, field, min = 1, max = 5000) {
+    if (typeof value !== "string") {
+        throw new Error(`${field} must be a string`);
+    }
+    const normalized = value.trim();
+    if (normalized.length < min || normalized.length > max) {
+        throw new Error(`${field} must be ${min}-${max} chars`);
+    }
+    return normalized;
+}
+function requireDate(value, field) {
+    const date = requireString(value, field, 10, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        throw new Error(`${field} must be YYYY-MM-DD`);
+    }
+    return date;
+}
+function enumOrDefault(value, allowed, fallback) {
+    if (typeof value !== "string") {
+        return fallback;
+    }
+    return allowed.includes(value) ? value : fallback;
+}
+function normalizeTaskStatusInput(value) {
+    return value === "todo" ? "backlog" : value;
+}
+function assertEnum(value, allowed, field) {
+    if (typeof value !== "string" || !allowed.includes(value)) {
+        throw new Error(`${field} must be one of: ${allowed.join(", ")}`);
+    }
+    return value;
+}
+async function writeActivity(params) {
+    await db.collection(paths.activity(params.productId)).add({
+        ...params,
+        createdAt: nowTs(),
+    });
+    await db.doc(paths.product(params.productId)).set({
+        lastActivityAt: nowTs(),
+        updatedAt: nowTs(),
+    }, { merge: true });
+}
+const CONTACT_CHANGE_LABELS = {
+    name: "Name",
+    kind: "Kind",
+    status: "Status",
+    company: "Company",
+    title: "Title",
+    email: "Email",
+    phone: "Phone",
+    linkedin: "LinkedIn",
+    website: "Website",
+    location: "Location",
+    notes: "Notes",
+    tags: "Tags",
+    linkedTaskIds: "Linked tasks",
+    archivedAt: "Archived at",
+};
+function contactValueForLog(value) {
+    if (value === undefined || value === null || value === "")
+        return "empty";
+    if (Array.isArray(value))
+        return value.map((item) => String(item)).join(", ") || "empty";
+    if (typeof value === "object")
+        return JSON.stringify(value);
+    return String(value);
+}
+function buildContactChanges(before, patch) {
+    const changes = [];
+    for (const [field, label] of Object.entries(CONTACT_CHANGE_LABELS)) {
+        if (!(field in patch))
+            continue;
+        const previous = contactValueForLog(before[field]);
+        const next = contactValueForLog(patch[field]);
+        if (previous === next)
+            continue;
+        changes.push({ field, label, before: previous, after: next });
+    }
+    return changes;
+}
+async function writeContactActivity(params) {
+    await db.collection(paths.contactActivity(params.productId, params.contactId)).add({
+        ...params,
+        changes: params.changes ?? [],
+        createdAt: nowTs(),
+    });
+}
+const READ_ONLY_AGENT_ACTIONS = new Set([
+    "listProducts",
+    "getProductOverview",
+    "listTasks",
+    "getTask",
+    "task.comments.list",
+    "listContacts",
+]);
+const lastSyncCallAt = new Map();
+function shouldLogAgentRun(action) {
+    if (action === "summary.write") {
+        return LOG_AGENT_RUN_SYNCS;
+    }
+    if (READ_ONLY_AGENT_ACTIONS.has(action)) {
+        return LOG_AGENT_RUN_READS;
+    }
+    return true;
+}
+function assertSyncRateLimit(syncKey) {
+    const now = Date.now();
+    const prev = lastSyncCallAt.get(syncKey) ?? 0;
+    const minMs = OPENCLOW_SYNC_MIN_INTERVAL_SECONDS * 1000;
+    if (now - prev < minMs) {
+        throw new Error(`Sync throttled for ${syncKey}. Retry in ${Math.ceil((minMs - (now - prev)) / 1000)}s`);
+    }
+    lastSyncCallAt.set(syncKey, now);
+}
+function hashString(value) {
+    return (0, crypto_1.createHash)("sha256").update(value).digest("hex");
+}
+function isSameJson(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+}
+async function startAgentRun(params) {
+    if (!shouldLogAgentRun(params.action)) {
+        return null;
+    }
+    const ref = db.collection(paths.agentRuns).doc();
+    await ref.set({
+        id: ref.id,
+        productId: params.productId,
+        agentId: params.agentId,
+        action: params.action,
+        status: "started",
+        inputSummary: params.inputSummary ?? "",
+        createdAt: nowTs(),
+    });
+    return ref;
+}
+async function finishAgentRun(runRef, result) {
+    if (!runRef) {
+        return;
+    }
+    await runRef.set({
+        status: result.status,
+        outputSummary: result.outputSummary ?? "",
+        errorMessage: result.errorMessage ?? "",
+        completedAt: nowTs(),
+    }, { merge: true });
+}
+async function syncTaskDocumentLinks(params) {
+    const taskKey = `${params.productId}:${params.taskId}`;
+    const normalized = Array.from(new Set(params.linkedDocIds
+        .map((id) => String(id).trim())
+        .filter(Boolean)));
+    const docsCol = db.collection(paths.openclawDocs);
+    const currentSnap = await docsCol.where("linkedTaskKeys", "array-contains", taskKey).get();
+    const currentlyLinkedIds = new Set(currentSnap.docs.map((docSnap) => docSnap.id));
+    const toRemove = currentSnap.docs.filter((docSnap) => !normalized.includes(docSnap.id));
+    const toAdd = normalized.filter((docId) => !currentlyLinkedIds.has(docId));
+    const batch = db.batch();
+    for (const docSnap of toRemove) {
+        const data = docSnap.data();
+        const nextKeys = (data.linkedTaskKeys ?? []).filter((key) => key !== taskKey);
+        const nextTasks = (data.linkedTasks ?? []).filter((item) => !(item.productId === params.productId && item.taskId === params.taskId));
+        batch.set(docSnap.ref, {
+            linkedTaskKeys: nextKeys,
+            linkedTasks: nextTasks,
+            updatedAt: nowTs(),
+        }, { merge: true });
+    }
+    for (const docId of toAdd) {
+        const docRef = docsCol.doc(docId);
+        const docSnap = await docRef.get();
+        const data = (docSnap.data() ?? {});
+        const nextKeys = Array.from(new Set([...(data.linkedTaskKeys ?? []), taskKey]));
+        const nextTasks = [
+            ...(data.linkedTasks ?? []).filter((item) => !(item.productId === params.productId && item.taskId === params.taskId)),
+            { productId: params.productId, taskId: params.taskId, title: params.taskTitle },
+        ];
+        batch.set(docRef, {
+            id: docId,
+            name: docId,
+            type: "unknown",
+            content: docSnap.exists ? data.content ?? "" : "",
+            linkedTaskKeys: nextKeys,
+            linkedTasks: nextTasks,
+            updatedAt: nowTs(),
+        }, { merge: true });
+    }
+    await batch.commit();
+}
+async function createTaskInternal(input) {
+    const taskRef = db.collection(paths.tasks(input.productId)).doc();
+    const uploadedTaskAttachments = (await Promise.all((input.attachments ?? []).slice(0, 10).map((upload) => uploadTaskAttachment({
+        productId: input.productId,
+        taskId: taskRef.id,
+        scope: "task",
+        upload,
+    })))).filter(Boolean);
+    const task = {
+        id: taskRef.id,
+        productId: input.productId,
+        title: requireString(input.title, "title", 3, 120),
+        description: input.description?.trim() || "",
+        type: enumOrDefault(input.type, TASK_TYPES, "other"),
+        status: "backlog",
+        priority: enumOrDefault(input.priority, TASK_PRIORITIES, "medium"),
+        dueDate: input.dueDate ?? null,
+        assignedType: input.assignedType ?? null,
+        assignedId: input.assignedId ?? null,
+        linkedContactIds: Array.isArray(input.linkedContactIds) ? input.linkedContactIds : [],
+        linkedKpiKeys: Array.isArray(input.linkedKpiKeys) ? input.linkedKpiKeys : [],
+        linkedDocIds: Array.isArray(input.linkedDocIds) ? input.linkedDocIds : [],
+        discordChannelId: input.discordChannelId?.trim() || "",
+        checklist: (input.checklist ?? []).map((item, index) => ({
+            id: `item_${index + 1}`,
+            text: String(item.text ?? ""),
+            done: false,
+        })),
+        latestCommentPreview: "",
+        commentCount: 0,
+        source: input.source ?? "manual",
+        blockedReason: input.blockedReason?.trim() || "",
+        attachments: uploadedTaskAttachments,
+        createdBy: input.actorId,
+        createdAt: nowTs(),
+        updatedAt: nowTs(),
+        completedAt: null,
+    };
+    await taskRef.set(task);
+    await syncTaskDocumentLinks({
+        productId: input.productId,
+        taskId: taskRef.id,
+        taskTitle: task.title,
+        linkedDocIds: Array.isArray(task.linkedDocIds) ? task.linkedDocIds : [],
+    });
+    await writeActivity({
+        productId: input.productId,
+        type: "task.created",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        targetType: "task",
+        targetId: taskRef.id,
+        message: `Task created: ${task.title}`,
+    });
+    return taskRef.id;
+}
+async function updateTaskInternal(input) {
+    const taskRef = db.doc(paths.task(input.productId, input.taskId));
+    const current = await taskRef.get();
+    if (!current.exists) {
+        throw new Error("Task not found");
+    }
+    const currentData = current.data() ?? {};
+    const nextStatusRaw = normalizeTaskStatusInput(input.patch.status);
+    const previousStatus = String(currentData.status ?? "");
+    const updatePayload = {
+        ...input.patch,
+        updatedAt: nowTs(),
+    };
+    if (typeof input.patch.type === "string") {
+        updatePayload.type = assertEnum(input.patch.type, TASK_TYPES, "type");
+    }
+    if (typeof input.patch.priority === "string") {
+        updatePayload.priority = assertEnum(input.patch.priority, TASK_PRIORITIES, "priority");
+    }
+    if (Array.isArray(input.patch.linkedDocIds)) {
+        updatePayload.linkedDocIds = input.patch.linkedDocIds
+            .map((id) => String(id).trim())
+            .filter(Boolean);
+    }
+    const retainedAttachments = Array.isArray(input.patch.attachments)
+        ? input.patch.attachments
+            .map((row) => sanitizeExistingAttachment(row))
+            .filter((row) => Boolean(row))
+            .slice(0, 10)
+        : Array.isArray(currentData.attachments)
+            ? currentData.attachments
+                .map((row) => sanitizeExistingAttachment(row))
+                .filter((row) => Boolean(row))
+                .slice(0, 10)
+            : [];
+    const newAttachmentsInput = Array.isArray(input.patch.newAttachments)
+        ? input.patch.newAttachments.slice(0, Math.max(0, 10 - retainedAttachments.length))
+        : [];
+    const uploadedTaskAttachments = await Promise.all(newAttachmentsInput.map((upload) => uploadTaskAttachment({
+        productId: input.productId,
+        taskId: input.taskId,
+        scope: "task",
+        upload,
+    })));
+    if (Array.isArray(input.patch.attachments) || newAttachmentsInput.length > 0) {
+        updatePayload.attachments = [...retainedAttachments, ...uploadedTaskAttachments];
+    }
+    let nextStatus;
+    if (typeof nextStatusRaw === "string") {
+        nextStatus = assertEnum(nextStatusRaw, TASK_STATUSES, "status");
+        updatePayload.status = nextStatus;
+    }
+    if (nextStatus === "done") {
+        updatePayload.completedAt = nowTs();
+    }
+    else if (previousStatus === "done" && nextStatus) {
+        updatePayload.completedAt = null;
+    }
+    await taskRef.set(updatePayload, { merge: true });
+    if (Array.isArray(updatePayload.linkedDocIds)) {
+        await syncTaskDocumentLinks({
+            productId: input.productId,
+            taskId: input.taskId,
+            taskTitle: String(updatePayload.title ?? currentData.title ?? input.taskId),
+            linkedDocIds: updatePayload.linkedDocIds,
+        });
+    }
+    await writeActivity({
+        productId: input.productId,
+        type: nextStatus && nextStatus !== previousStatus ? "task.status_changed" : "task.updated",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        targetType: "task",
+        targetId: input.taskId,
+        message: nextStatus && nextStatus !== previousStatus
+            ? `Task moved from ${previousStatus || "unknown"} to ${nextStatus}`
+            : `Task updated: ${String(currentData.title ?? input.taskId)}`,
+    });
+}
+async function addTaskCommentInternal(input) {
+    const body = requireString(input.body, "body", 1, 3000);
+    const commentsRef = db.collection(paths.taskComments(input.productId, input.taskId));
+    const commentRef = commentsRef.doc();
+    const taskRef = db.doc(paths.task(input.productId, input.taskId));
+    const uploadedCommentAttachments = (await Promise.all((input.attachments ?? []).slice(0, 10).map((upload) => uploadTaskAttachment({
+        productId: input.productId,
+        taskId: input.taskId,
+        scope: "comment",
+        upload,
+    })))).filter(Boolean);
+    await db.runTransaction(async (tx) => {
+        const taskSnap = await tx.get(taskRef);
+        if (!taskSnap.exists) {
+            throw new Error("Task not found");
+        }
+        const data = taskSnap.data() ?? {};
+        const currentCount = Number(data.commentCount ?? 0);
+        tx.set(commentRef, {
+            id: commentRef.id,
+            taskId: input.taskId,
+            productId: input.productId,
+            authorType: input.actorType,
+            authorId: input.actorId,
+            body,
+            attachments: uploadedCommentAttachments,
+            createdAt: nowTs(),
+        });
+        tx.set(taskRef, {
+            commentCount: currentCount + 1,
+            latestCommentPreview: body.slice(0, 160),
+            updatedAt: nowTs(),
+        }, { merge: true });
+    });
+    await writeActivity({
+        productId: input.productId,
+        type: "task.commented",
+        actorType: input.actorType,
+        actorId: input.actorId,
+        targetType: "task",
+        targetId: input.taskId,
+        message: `${input.actorType} commented on task ${input.taskId}`,
+    });
+    return commentRef.id;
+}
+exports.createProduct = eu.https.onCall(async (data, context) => {
+    try {
+        const ownerUid = requireOwner(context);
+        const name = requireString(data?.name, "name", 2, 80);
+        const slug = data?.slug ? requireString(data.slug, "slug", 2, 64) : slugify(name);
+        const products = await db.collection("products").orderBy("order", "desc").limit(1).get();
+        const nextOrder = products.empty ? 0 : Number(products.docs[0].get("order") ?? 0) + 1;
+        const productRef = db.collection("products").doc(slug);
+        const existing = await productRef.get();
+        if (existing.exists) {
+            throw new Error("Product slug already exists");
+        }
+        await productRef.set({
+            id: productRef.id,
+            name,
+            slug,
+            repo: data?.repo ? String(data.repo).trim() : "",
+            description: data?.description ?? "",
+            mission: data?.mission ?? "",
+            // Optional notification routing (Discord channel id). Leave empty to default to general.
+            discordChannelId: data?.discordChannelId ? String(data.discordChannelId).trim() : "",
+            status: "active",
+            order: nextOrder,
+            color: data?.color ?? "",
+            icon: data?.icon ?? "",
+            ownerId: ownerUid,
+            createdAt: nowTs(),
+            updatedAt: nowTs(),
+        });
+        await db.doc(paths.settings(productRef.id)).set({
+            productId: productRef.id,
+            crmKinds: CONTACT_KINDS,
+            crmStatuses: CONTACT_STATUSES,
+            taskStatuses: TASK_STATUSES,
+            taskTypes: TASK_TYPES,
+            taskPriorities: TASK_PRIORITIES,
+            allowedAgents: [],
+            mobileDefaultView: "overview",
+            updatedAt: nowTs(),
+        });
+        return { productId: productRef.id };
+    }
+    catch (error) {
+        throw new functions.https.HttpsError("invalid-argument", error.message);
+    }
+});
+exports.updateProduct = eu.https.onCall(async (data, context) => {
+    const ownerUid = requireOwner(context);
+    const productId = requireString(data?.productId, "productId", 2, 120);
+    const patch = (data?.patch ?? {});
+    await db.doc(paths.product(productId)).set({ ...patch, updatedAt: nowTs() }, { merge: true });
+    await writeActivity({
+        productId,
+        type: "product.updated",
+        actorType: "owner",
+        actorId: ownerUid,
+        targetType: "product",
+        targetId: productId,
+        message: `Product updated: ${productId}`,
+    });
+    return { ok: true };
+});
+exports.createContact = eu.https.onCall(async (data, context) => {
+    try {
+        const ownerUid = requireOwner(context);
+        const productId = requireString(data?.productId, "productId", 2, 120);
+        const name = requireString(data?.name, "name", 2, 120);
+        const ref = db.collection(paths.contacts(productId)).doc();
+        await ref.set({
+            id: ref.id,
+            productId,
+            kind: enumOrDefault(data?.kind, CONTACT_KINDS, "lead"),
+            name,
+            company: data?.company ?? "",
+            title: data?.title ?? "",
+            email: data?.email ?? "",
+            phone: data?.phone ?? "",
+            linkedin: data?.linkedin ?? "",
+            website: data?.website ?? "",
+            location: data?.location ?? "",
+            status: enumOrDefault(data?.status, CONTACT_STATUSES, "new"),
+            tags: Array.isArray(data?.tags) ? data.tags : [],
+            notes: data?.notes ?? "",
+            linkedTaskIds: Array.isArray(data?.linkedTaskIds) ? data.linkedTaskIds : [],
+            createdBy: ownerUid,
+            createdAt: nowTs(),
+            updatedAt: nowTs(),
+            archivedAt: null,
+        });
+        await writeActivity({
+            productId,
+            type: "contact.created",
+            actorType: "owner",
+            actorId: ownerUid,
+            targetType: "contact",
+            targetId: ref.id,
+            message: `Contact created: ${name}`,
+        });
+        await writeContactActivity({
+            productId,
+            contactId: ref.id,
+            actorType: "owner",
+            actorId: ownerUid,
+            type: "contact.created",
+            message: `Contact created`,
+            changes: [],
+        });
+        return { contactId: ref.id };
+    }
+    catch (error) {
+        throw new functions.https.HttpsError("invalid-argument", error.message);
+    }
+});
+exports.updateContact = eu.https.onCall(async (data, context) => {
+    const ownerUid = requireOwner(context);
+    const productId = requireString(data?.productId, "productId", 2, 120);
+    const contactId = requireString(data?.contactId, "contactId", 2, 120);
+    const patch = (data?.patch ?? {});
+    if (typeof patch.status === "string") {
+        patch.status = assertEnum(patch.status, CONTACT_STATUSES, "status");
+    }
+    if (typeof patch.kind === "string") {
+        patch.kind = assertEnum(patch.kind, CONTACT_KINDS, "kind");
+    }
+    const contactRef = db.doc(paths.contact(productId, contactId));
+    const beforeSnap = await contactRef.get();
+    const before = (beforeSnap.data() ?? {});
+    const changes = buildContactChanges(before, patch);
+    await contactRef.set({ ...patch, updatedAt: nowTs() }, { merge: true });
+    await writeActivity({
+        productId,
+        type: "contact.updated",
+        actorType: "owner",
+        actorId: ownerUid,
+        targetType: "contact",
+        targetId: contactId,
+        message: `Contact updated: ${String(patch.name || before.name || contactId)}`,
+    });
+    const changeSummary = changes.length > 0
+        ? changes.slice(0, 3).map((item) => `${item.label}: ${item.before} -> ${item.after}`).join(" • ")
+        : "No field changes";
+    await writeContactActivity({
+        productId,
+        contactId,
+        actorType: "owner",
+        actorId: ownerUid,
+        type: "contact.updated",
+        message: changeSummary,
+        changes,
+    });
+    return { ok: true };
+});
+exports.deleteContact = eu.https.onCall(async (data, context) => {
+    const ownerUid = requireOwner(context);
+    const productId = requireString(data?.productId, "productId", 2, 120);
+    const contactId = requireString(data?.contactId, "contactId", 2, 120);
+    const contactRef = db.doc(paths.contact(productId, contactId));
+    const contactSnap = await contactRef.get();
+    if (!contactSnap.exists) {
+        throw new functions.https.HttpsError("not-found", "Contact not found");
+    }
+    const contactData = contactSnap.data() ?? {};
+    const contactName = String(contactData.name ?? contactId);
+    const activitySnap = await db.collection(paths.contactActivity(productId, contactId)).get();
+    const batch = db.batch();
+    for (const docSnap of activitySnap.docs) {
+        batch.delete(docSnap.ref);
+    }
+    batch.delete(contactRef);
+    await batch.commit();
+    await writeActivity({
+        productId,
+        type: "contact.updated",
+        actorType: "owner",
+        actorId: ownerUid,
+        targetType: "contact",
+        targetId: contactId,
+        message: `Contact deleted: ${contactName}`,
+    });
+    return { ok: true };
+});
+exports.createTask = eu.https.onCall(async (data, context) => {
+    try {
+        const ownerUid = requireOwner(context);
+        const productId = requireString(data?.productId, "productId", 2, 120);
+        const taskId = await createTaskInternal({
+            productId,
+            actorId: ownerUid,
+            actorType: "owner",
+            title: data?.title,
+            description: data?.description,
+            type: data?.type,
+            priority: data?.priority,
+            dueDate: data?.dueDate,
+            assignedType: data?.assignedType,
+            assignedId: data?.assignedId,
+            linkedContactIds: data?.linkedContactIds,
+            linkedKpiKeys: data?.linkedKpiKeys,
+            linkedDocIds: data?.linkedDocIds,
+            discordChannelId: data?.discordChannelId,
+            checklist: data?.checklist,
+            source: data?.source,
+            blockedReason: data?.blockedReason,
+            attachments: Array.isArray(data?.attachments) ? data.attachments : [],
+        });
+        return { taskId };
+    }
+    catch (error) {
+        throw new functions.https.HttpsError("invalid-argument", error.message);
+    }
+});
+exports.updateTask = eu.https.onCall(async (data, context) => {
+    try {
+        const ownerUid = requireOwner(context);
+        const productId = requireString(data?.productId, "productId", 2, 120);
+        const taskId = requireString(data?.taskId, "taskId", 2, 120);
+        await updateTaskInternal({
+            productId,
+            taskId,
+            patch: (data?.patch ?? {}),
+            actorType: "owner",
+            actorId: ownerUid,
+        });
+        return { ok: true };
+    }
+    catch (error) {
+        throw new functions.https.HttpsError("invalid-argument", error.message);
+    }
+});
+exports.deleteTask = eu.https.onCall(async (data, context) => {
+    const ownerUid = requireOwner(context);
+    const productId = requireString(data?.productId, "productId", 2, 120);
+    const taskId = requireString(data?.taskId, "taskId", 2, 120);
+    const taskRef = db.doc(paths.task(productId, taskId));
+    const taskSnap = await taskRef.get();
+    if (!taskSnap.exists) {
+        throw new functions.https.HttpsError("not-found", "Task not found");
+    }
+    const taskData = taskSnap.data() ?? {};
+    const taskTitle = String(taskData.title ?? taskId);
+    await syncTaskDocumentLinks({
+        productId,
+        taskId,
+        taskTitle,
+        linkedDocIds: [],
+    });
+    const commentsSnap = await db.collection(paths.taskComments(productId, taskId)).get();
+    const batch = db.batch();
+    for (const docSnap of commentsSnap.docs) {
+        batch.delete(docSnap.ref);
+    }
+    batch.delete(taskRef);
+    await batch.commit();
+    await writeActivity({
+        productId,
+        type: "task.updated",
+        actorType: "owner",
+        actorId: ownerUid,
+        targetType: "task",
+        targetId: taskId,
+        message: `Task deleted: ${taskTitle}`,
+    });
+    return { ok: true };
+});
+exports.addTaskComment = eu.https.onCall(async (data, context) => {
+    try {
+        const ownerUid = requireOwner(context);
+        const productId = requireString(data?.productId, "productId", 2, 120);
+        const taskId = requireString(data?.taskId, "taskId", 2, 120);
+        const body = requireString(data?.body, "body", 1, 3000);
+        const commentId = await addTaskCommentInternal({
+            productId,
+            taskId,
+            body,
+            actorType: "owner",
+            actorId: ownerUid,
+            attachments: Array.isArray(data?.attachments) ? data.attachments : [],
+        });
+        return { commentId };
+    }
+    catch (error) {
+        throw new functions.https.HttpsError("invalid-argument", error.message);
+    }
+});
+exports.createKpi = eu.https.onCall(async (data, context) => {
+    try {
+        const ownerUid = requireOwner(context);
+        const productId = requireString(data?.productId, "productId", 2, 120);
+        const key = requireString(data?.key, "key", 2, 80);
+        const name = requireString(data?.name, "name", 2, 120);
+        await db.doc(paths.kpi(productId, key)).set({
+            key,
+            productId,
+            name,
+            description: data?.description ?? "",
+            unit: enumOrDefault(data?.unit, ["number", "percent", "currency", "text"], "number"),
+            targetDirection: enumOrDefault(data?.targetDirection, ["up", "down", "flat"], "up"),
+            targetValue: typeof data?.targetValue === "number" ? data.targetValue : null,
+            active: true,
+            order: typeof data?.order === "number" ? data.order : 0,
+            createdAt: nowTs(),
+            updatedAt: nowTs(),
+        });
+        await writeActivity({
+            productId,
+            type: "kpi.created",
+            actorType: "owner",
+            actorId: ownerUid,
+            targetType: "kpi",
+            targetId: key,
+            message: `KPI created: ${name}`,
+        });
+        return { ok: true };
+    }
+    catch (error) {
+        throw new functions.https.HttpsError("invalid-argument", error.message);
+    }
+});
+exports.addKpiEntry = eu.https.onCall(async (data, context) => {
+    try {
+        const ownerUid = requireOwner(context);
+        const productId = requireString(data?.productId, "productId", 2, 120);
+        const kpiKey = requireString(data?.kpiKey, "kpiKey", 2, 120);
+        if (typeof data?.value !== "number") {
+            throw new Error("value must be a number");
+        }
+        const ref = db.collection(paths.kpiEntries(productId, kpiKey)).doc();
+        await ref.set({
+            id: ref.id,
+            productId,
+            kpiKey,
+            value: data.value,
+            date: requireDate(data?.date, "date"),
+            source: enumOrDefault(data?.source, ["manual", "import", "automation"], "manual"),
+            note: data?.note ?? "",
+            createdAt: nowTs(),
+        });
+        await writeActivity({
+            productId,
+            type: "kpi.entry_added",
+            actorType: "owner",
+            actorId: ownerUid,
+            targetType: "kpi",
+            targetId: kpiKey,
+            message: `Added KPI entry for ${kpiKey}: ${data.value}`,
+        });
+        return { ok: true };
+    }
+    catch (error) {
+        throw new functions.https.HttpsError("invalid-argument", error.message);
+    }
+});
+const openclaw = (0, express_1.default)();
+openclaw.use(express_1.default.json());
+openclaw.use((req, res, next) => {
+    if (!assertOpenClawSecret(req, res)) {
+        return;
+    }
+    next();
+});
+openclaw.post("/api/openclaw/listProducts", async (req, res) => {
+    const agentId = String(req.body?.agentId ?? "openclaw");
+    const run = await startAgentRun({ productId: "global", agentId, action: "listProducts" });
+    try {
+        const snap = await db.collection("products").orderBy("order", "asc").get();
+        await finishAgentRun(run, { status: "success", outputSummary: `count:${snap.size}` });
+        res.json({ ok: true, data: { items: snap.docs.map((d) => d.data()) } });
+    }
+    catch (error) {
+        await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/getProductOverview", async (req, res) => {
+    const productId = String(req.body?.productId ?? "").trim();
+    const agentId = String(req.body?.agentId ?? "openclaw").trim();
+    if (!productId) {
+        res.status(400).json({ ok: false, error: "productId is required" });
+        return;
+    }
+    const run = await startAgentRun({ productId, agentId, action: "getProductOverview" });
+    try {
+        const [kpiSnap, tasksSnap, contactsSnap, activitySnap, blockersSnap] = await Promise.all([
+            db.collection(paths.kpis(productId)).where("active", "==", true).limit(6).get(),
+            db
+                .collection(paths.tasks(productId))
+                .where("status", "!=", "done")
+                .orderBy("status")
+                .orderBy("updatedAt", "desc")
+                .limit(5)
+                .get(),
+            db
+                .collection(paths.contacts(productId))
+                .where("status", "in", ["contacted", "interested", "customer"])
+                .orderBy("updatedAt", "desc")
+                .limit(5)
+                .get(),
+            db.collection(paths.activity(productId)).orderBy("createdAt", "desc").limit(10).get(),
+            db.collection(paths.tasks(productId)).where("status", "==", "blocked").limit(10).get(),
+        ]);
+        await finishAgentRun(run, { status: "success", outputSummary: "overview loaded" });
+        res.json({
+            ok: true,
+            data: {
+                kpiSnapshot: kpiSnap.docs.map((d) => d.data()),
+                topPriorities: tasksSnap.docs.map((d) => d.data()),
+                keyContacts: contactsSnap.docs.map((d) => d.data()),
+                recentActivity: activitySnap.docs.map((d) => d.data()),
+                blockers: blockersSnap.docs.map((d) => d.data()),
+                latestAgentNote: activitySnap.docs.map((d) => d.data()).find((item) => item.actorType === "agent") ?? null,
+            },
+        });
+    }
+    catch (error) {
+        await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/listTasks", async (req, res) => {
+    const productId = String(req.body?.productId ?? "").trim();
+    const agentId = String(req.body?.agentId ?? "openclaw").trim();
+    const requestedStatus = String(req.body?.status ?? "").trim();
+    const status = String(normalizeTaskStatusInput(requestedStatus) ?? "").trim();
+    const take = Math.min(Number(req.body?.limit ?? 20), OPENCLOW_LIST_LIMIT_MAX);
+    if (!productId) {
+        res.status(400).json({ ok: false, error: "productId is required" });
+        return;
+    }
+    const run = await startAgentRun({ productId, agentId, action: "listTasks" });
+    try {
+        const resolvedProductId = await resolveProductId(productId);
+        let q = db.collection(paths.tasks(resolvedProductId));
+        if (status && TASK_STATUSES.includes(status)) {
+            q = q.where("status", "==", status);
+        }
+        const snap = await q.orderBy("updatedAt", "desc").limit(take).get();
+        await finishAgentRun(run, { status: "success", outputSummary: `count:${snap.size}` });
+        res.json({
+            ok: true,
+            data: {
+                productId: resolvedProductId,
+                requestedProductId: productId,
+                items: snap.docs.map((d) => d.data()),
+            },
+        });
+    }
+    catch (error) {
+        await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/getTask", async (req, res) => {
+    const taskId = String(req.body?.taskId ?? "").trim();
+    const requestedProductId = String(req.body?.productId ?? "").trim();
+    const agentId = String(req.body?.agentId ?? "openclaw").trim();
+    const includeComments = Boolean(req.body?.includeComments);
+    const commentLimit = Math.min(Number(req.body?.commentLimit ?? 20), OPENCLOW_LIST_LIMIT_MAX);
+    if (!taskId) {
+        res.status(400).json({ ok: false, error: "taskId is required" });
+        return;
+    }
+    const run = await startAgentRun({
+        productId: requestedProductId || "global",
+        agentId,
+        action: "getTask",
+    });
+    try {
+        let resolvedProductId = requestedProductId ? await resolveProductId(requestedProductId) : "";
+        let taskData = null;
+        if (resolvedProductId) {
+            const taskSnap = await db.doc(paths.task(resolvedProductId, taskId)).get();
+            if (taskSnap.exists) {
+                taskData = taskSnap.data() ?? null;
+            }
+        }
+        else {
+            const snap = await db.collectionGroup("tasks").where("id", "==", taskId).limit(1).get();
+            if (!snap.empty) {
+                const taskDoc = snap.docs[0];
+                taskData = taskDoc.data();
+                resolvedProductId = String(taskData.productId ?? "").trim();
+            }
+        }
+        if (!taskData || !resolvedProductId) {
+            await finishAgentRun(run, { status: "failed", errorMessage: `task:${taskId} not found` });
+            res.status(404).json({ ok: false, error: "Task not found" });
+            return;
+        }
+        let comments = [];
+        if (includeComments) {
+            const commentsSnap = await db
+                .collection(paths.taskComments(resolvedProductId, taskId))
+                .orderBy("createdAt", "desc")
+                .limit(commentLimit)
+                .get();
+            comments = commentsSnap.docs.map((d) => d.data());
+        }
+        await finishAgentRun(run, { status: "success", outputSummary: `task:${taskId}` });
+        res.json({
+            ok: true,
+            data: {
+                requestedProductId: requestedProductId || null,
+                productId: resolvedProductId,
+                task: taskData,
+                comments,
+            },
+        });
+    }
+    catch (error) {
+        await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/createTask", async (req, res) => {
+    let run = null;
+    try {
+        const productId = requireString(req.body?.productId, "productId", 2, 120);
+        const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+        run = await startAgentRun({ productId, agentId, action: "task.create" });
+        const taskId = await createTaskInternal({
+            productId,
+            actorId: agentId,
+            actorType: "agent",
+            title: req.body?.title,
+            description: req.body?.description,
+            type: req.body?.type,
+            priority: req.body?.priority,
+            dueDate: req.body?.dueDate,
+            assignedType: req.body?.assignedType,
+            assignedId: req.body?.assignedId,
+            linkedContactIds: req.body?.linkedContactIds,
+            linkedKpiKeys: req.body?.linkedKpiKeys,
+            linkedDocIds: req.body?.linkedDocIds,
+            discordChannelId: req.body?.discordChannelId,
+            checklist: req.body?.checklist,
+            source: "openclaw",
+            blockedReason: req.body?.blockedReason,
+            attachments: Array.isArray(req.body?.attachments) ? req.body.attachments : [],
+        });
+        await finishAgentRun(run, { status: "success", outputSummary: `taskId:${taskId}` });
+        res.json({ ok: true, data: { taskId } });
+    }
+    catch (error) {
+        if (run) {
+            await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        }
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/updateTask", async (req, res) => {
+    let run = null;
+    try {
+        const productId = requireString(req.body?.productId, "productId", 2, 120);
+        const taskId = requireString(req.body?.taskId, "taskId", 2, 120);
+        const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+        run = await startAgentRun({ productId, agentId, action: "task.update" });
+        await updateTaskInternal({
+            productId,
+            taskId,
+            patch: (req.body?.patch ?? {}),
+            actorType: "agent",
+            actorId: agentId,
+        });
+        await finishAgentRun(run, { status: "success", outputSummary: `taskId:${taskId}` });
+        res.json({ ok: true, data: { ok: true } });
+    }
+    catch (error) {
+        if (run) {
+            await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        }
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/addTaskComment", async (req, res) => {
+    let run = null;
+    try {
+        const productId = requireString(req.body?.productId, "productId", 2, 120);
+        const taskId = requireString(req.body?.taskId, "taskId", 2, 120);
+        const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+        run = await startAgentRun({ productId, agentId, action: "task.comment" });
+        const commentId = await addTaskCommentInternal({
+            productId,
+            taskId,
+            body: req.body?.body,
+            actorType: "agent",
+            actorId: agentId,
+            attachments: Array.isArray(req.body?.attachments) ? req.body.attachments : [],
+        });
+        await finishAgentRun(run, { status: "success", outputSummary: `commentId:${commentId}` });
+        res.json({ ok: true, data: { commentId } });
+    }
+    catch (error) {
+        if (run) {
+            await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        }
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/listTaskComments", async (req, res) => {
+    let run = null;
+    try {
+        const productId = requireString(req.body?.productId, "productId", 2, 120);
+        const taskId = requireString(req.body?.taskId, "taskId", 2, 120);
+        const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+        const take = Math.min(Number(req.body?.limit ?? 20), OPENCLOW_LIST_LIMIT_MAX);
+        run = await startAgentRun({ productId, agentId, action: "task.comments.list" });
+        const snap = await db
+            .collection(paths.taskComments(productId, taskId))
+            .orderBy("createdAt", "desc")
+            .limit(take)
+            .get();
+        const items = snap.docs.map((d) => d.data());
+        await finishAgentRun(run, { status: "success", outputSummary: `count:${items.length}` });
+        res.json({ ok: true, data: { items } });
+    }
+    catch (error) {
+        if (run) {
+            await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        }
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/listContacts", async (req, res) => {
+    const productId = String(req.body?.productId ?? "").trim();
+    const agentId = String(req.body?.agentId ?? "openclaw").trim();
+    const take = Math.min(Number(req.body?.limit ?? 20), OPENCLOW_LIST_LIMIT_MAX);
+    if (!productId) {
+        res.status(400).json({ ok: false, error: "productId is required" });
+        return;
+    }
+    const run = await startAgentRun({ productId, agentId, action: "listContacts" });
+    try {
+        const snap = await db.collection(paths.contacts(productId)).orderBy("updatedAt", "desc").limit(take).get();
+        await finishAgentRun(run, { status: "success", outputSummary: `count:${snap.size}` });
+        res.json({ ok: true, data: { items: snap.docs.map((d) => d.data()) } });
+    }
+    catch (error) {
+        await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/addKpiEntry", async (req, res) => {
+    let run = null;
+    try {
+        const productId = requireString(req.body?.productId, "productId", 2, 120);
+        const kpiKey = requireString(req.body?.kpiKey, "kpiKey", 2, 120);
+        const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+        if (typeof req.body?.value !== "number") {
+            throw new Error("value must be a number");
+        }
+        run = await startAgentRun({ productId, agentId, action: "kpi.entry" });
+        const ref = db.collection(paths.kpiEntries(productId, kpiKey)).doc();
+        await ref.set({
+            id: ref.id,
+            productId,
+            kpiKey,
+            value: req.body.value,
+            date: requireDate(req.body?.date, "date"),
+            source: "automation",
+            note: req.body?.note ?? "",
+            createdAt: nowTs(),
+        });
+        await writeActivity({
+            productId,
+            type: "kpi.entry_added",
+            actorType: "agent",
+            actorId: agentId,
+            targetType: "kpi",
+            targetId: kpiKey,
+            message: `OpenClaw added KPI entry for ${kpiKey}: ${req.body.value}`,
+        });
+        await finishAgentRun(run, { status: "success", outputSummary: `entryId:${ref.id}` });
+        res.json({ ok: true, data: { id: ref.id } });
+    }
+    catch (error) {
+        if (run) {
+            await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        }
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/syncSchedules", async (req, res) => {
+    let run = null;
+    try {
+        const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+        assertSyncRateLimit(`syncSchedules:${agentId}`);
+        const timezone = String(req.body?.timezone ?? "UTC");
+        const generatedAt = String(req.body?.generatedAt ?? new Date().toISOString());
+        const jobsRaw = Array.isArray(req.body?.jobs) ? req.body.jobs : [];
+        const jobs = jobsRaw.slice(0, OPENCLOW_MAX_SYNC_ITEMS);
+        run = await startAgentRun({
+            productId: "global",
+            agentId,
+            action: "summary.write",
+            inputSummary: `syncSchedules:${jobs.length}`,
+        });
+        const schedulesCol = db.collection("openclaw_schedules");
+        const existingSnap = await schedulesCol.where("agentId", "==", agentId).get();
+        const existingById = new Map(existingSnap.docs.map((docSnap) => [docSnap.id, docSnap.data()]));
+        const incomingDocIds = new Set();
+        const batch = db.batch();
+        let changedCount = 0;
+        for (const rawJob of jobs) {
+            const jobId = requireString(rawJob?.id, "job.id", 2, 120);
+            const name = requireString(rawJob?.name, "job.name", 2, 160);
+            const docId = `${agentId}__${jobId}`;
+            incomingDocIds.add(docId);
+            const weekSlots = Array.isArray(rawJob?.weekSlots)
+                ? rawJob.weekSlots
+                    .map((slot) => {
+                    const day = Number(slot?.day);
+                    const time = String(slot?.time ?? "");
+                    if (!Number.isInteger(day) || day < 0 || day > 6 || !/^\d{2}:\d{2}$/.test(time)) {
+                        return null;
+                    }
+                    return {
+                        day,
+                        time,
+                        label: String(slot?.label ?? ""),
+                    };
+                })
+                    .filter(Boolean)
+                : [];
+            const payload = {
+                id: jobId,
+                docId,
+                name,
+                agentId,
+                enabled: rawJob?.enabled !== false,
+                alwaysRunning: Boolean(rawJob?.alwaysRunning),
+                color: String(rawJob?.color ?? ""),
+                timezone: String(rawJob?.timezone ?? timezone),
+                productId: rawJob?.productId ? String(rawJob.productId) : null,
+                scheduleType: String(rawJob?.scheduleType ?? "other"),
+                expression: String(rawJob?.expression ?? ""),
+                tags: Array.isArray(rawJob?.tags) ? rawJob.tags.map((tag) => String(tag)) : [],
+                weekSlots,
+                nextRuns: Array.isArray(rawJob?.nextRuns) ? rawJob.nextRuns.map((runAt) => String(runAt)) : [],
+                sourceUpdatedAt: String(rawJob?.sourceUpdatedAt ?? generatedAt),
+            };
+            const existing = existingById.get(docId) ?? null;
+            const unchanged = Boolean(existing) &&
+                isSameJson(payload, {
+                    id: existing?.id,
+                    docId: existing?.docId,
+                    name: existing?.name,
+                    agentId: existing?.agentId,
+                    enabled: existing?.enabled,
+                    alwaysRunning: existing?.alwaysRunning,
+                    color: existing?.color,
+                    timezone: existing?.timezone,
+                    productId: existing?.productId ?? null,
+                    scheduleType: existing?.scheduleType,
+                    expression: existing?.expression,
+                    tags: existing?.tags ?? [],
+                    weekSlots: existing?.weekSlots ?? [],
+                    nextRuns: existing?.nextRuns ?? [],
+                    sourceUpdatedAt: existing?.sourceUpdatedAt,
+                });
+            if (unchanged) {
+                continue;
+            }
+            changedCount += 1;
+            batch.set(schedulesCol.doc(docId), {
+                ...payload,
+                syncedAt: generatedAt,
+                updatedAt: nowTs(),
+            }, { merge: true });
+        }
+        if (SYNC_DELETE_MISSING) {
+            for (const docSnap of existingSnap.docs) {
+                if (!incomingDocIds.has(docSnap.id)) {
+                    changedCount += 1;
+                    batch.delete(docSnap.ref);
+                }
+            }
+        }
+        batch.set(db.doc(`system/openclaw_schedule_sync_${agentId}`), {
+            agentId,
+            timezone,
+            generatedAt,
+            lastSyncedAt: nowTs(),
+            count: jobs.length,
+            changedCount,
+        }, { merge: true });
+        await batch.commit();
+        await finishAgentRun(run, { status: "success", outputSummary: `schedules:${jobs.length};changed:${changedCount}` });
+        res.json({ ok: true, data: { count: jobs.length, changedCount, limited: jobsRaw.length > jobs.length } });
+    }
+    catch (error) {
+        if (run) {
+            await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        }
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/syncMemory", async (req, res) => {
+    let run = null;
+    try {
+        const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+        assertSyncRateLimit(`syncMemory:${agentId}`);
+        const generatedAt = String(req.body?.generatedAt ?? new Date().toISOString());
+        const entriesRaw = Array.isArray(req.body?.entries) ? req.body.entries : [];
+        const entries = entriesRaw.slice(0, OPENCLOW_MAX_SYNC_ITEMS);
+        const longTerm = req.body?.longTerm ?? null;
+        run = await startAgentRun({
+            productId: "global",
+            agentId,
+            action: "summary.write",
+            inputSummary: `syncMemory:${entries.length}`,
+        });
+        const entriesCol = db.collection("openclaw_memory_entries");
+        const existingSnap = await entriesCol.where("agentId", "==", agentId).get();
+        const existingById = new Map(existingSnap.docs.map((docSnap) => [docSnap.id, docSnap.data()]));
+        const incomingIds = new Set();
+        const batch = db.batch();
+        let changedCount = 0;
+        for (const rawEntry of entries) {
+            const id = requireString(rawEntry?.id, "entry.id", 2, 160);
+            const title = requireString(rawEntry?.title, "entry.title", 2, 240);
+            const content = requireString(rawEntry?.content, "entry.content", 1, 200000);
+            incomingIds.add(id);
+            const payload = {
+                id,
+                title,
+                content,
+                summary: String(rawEntry?.summary ?? ""),
+                tags: Array.isArray(rawEntry?.tags) ? rawEntry.tags.map((tag) => String(tag)) : [],
+                sourceFile: String(rawEntry?.sourceFile ?? ""),
+                agentId,
+                wordCount: Number(rawEntry?.wordCount ?? 0),
+                createdAt: String(rawEntry?.createdAt ?? generatedAt),
+                updatedAt: String(rawEntry?.updatedAt ?? generatedAt),
+            };
+            const existing = existingById.get(id) ?? null;
+            const unchanged = Boolean(existing) &&
+                isSameJson(payload, {
+                    id: existing?.id,
+                    title: existing?.title,
+                    content: existing?.content,
+                    summary: existing?.summary ?? "",
+                    tags: existing?.tags ?? [],
+                    sourceFile: existing?.sourceFile ?? "",
+                    agentId: existing?.agentId,
+                    wordCount: Number(existing?.wordCount ?? 0),
+                    createdAt: String(existing?.createdAt ?? ""),
+                    updatedAt: String(existing?.updatedAt ?? ""),
+                });
+            if (unchanged) {
+                continue;
+            }
+            changedCount += 1;
+            batch.set(entriesCol.doc(id), {
+                ...payload,
+                syncedAt: generatedAt,
+            }, { merge: true });
+        }
+        if (SYNC_DELETE_MISSING) {
+            for (const docSnap of existingSnap.docs) {
+                if (!incomingIds.has(docSnap.id)) {
+                    changedCount += 1;
+                    batch.delete(docSnap.ref);
+                }
+            }
+        }
+        if (longTerm) {
+            const title = requireString(longTerm?.title, "longTerm.title", 2, 240);
+            const content = requireString(longTerm?.content, "longTerm.content", 1, 500000);
+            const longTermPayload = {
+                id: "long_term",
+                title,
+                content,
+                sourceFile: String(longTerm?.sourceFile ?? ""),
+                wordCount: Number(longTerm?.wordCount ?? 0),
+                updatedAt: String(longTerm?.updatedAt ?? generatedAt),
+                agentId,
+            };
+            const longTermRef = db.doc("openclaw_memory/long_term");
+            const longTermSnap = await longTermRef.get();
+            const longTermExisting = longTermSnap.exists ? longTermSnap.data() ?? null : null;
+            const longTermUnchanged = Boolean(longTermExisting) &&
+                isSameJson(longTermPayload, {
+                    id: longTermExisting?.id,
+                    title: longTermExisting?.title,
+                    content: longTermExisting?.content,
+                    sourceFile: longTermExisting?.sourceFile ?? "",
+                    wordCount: Number(longTermExisting?.wordCount ?? 0),
+                    updatedAt: String(longTermExisting?.updatedAt ?? ""),
+                    agentId: longTermExisting?.agentId,
+                });
+            if (!longTermUnchanged) {
+                changedCount += 1;
+                batch.set(longTermRef, {
+                    ...longTermPayload,
+                    syncedAt: generatedAt,
+                }, { merge: true });
+            }
+        }
+        batch.set(db.doc("system/openclaw_memory_sync"), {
+            agentId,
+            generatedAt,
+            count: entries.length,
+            changedCount,
+            lastSyncedAt: nowTs(),
+        }, { merge: true });
+        await batch.commit();
+        await finishAgentRun(run, { status: "success", outputSummary: `memory:${entries.length};changed:${changedCount}` });
+        res.json({ ok: true, data: { count: entries.length, changedCount, limited: entriesRaw.length > entries.length } });
+    }
+    catch (error) {
+        if (run) {
+            await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        }
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/syncDocs", async (req, res) => {
+    let run = null;
+    try {
+        const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+        assertSyncRateLimit(`syncDocs:${agentId}`);
+        const generatedAt = String(req.body?.generatedAt ?? new Date().toISOString());
+        const docsRaw = Array.isArray(req.body?.docs) ? req.body.docs : [];
+        const docs = docsRaw.slice(0, OPENCLOW_MAX_SYNC_ITEMS);
+        run = await startAgentRun({
+            productId: "global",
+            agentId,
+            action: "summary.write",
+            inputSummary: `syncDocs:${docs.length}`,
+        });
+        const docsCol = db.collection(paths.openclawDocs);
+        const existingSnap = await docsCol.where("agentId", "==", agentId).get();
+        const existingById = new Map(existingSnap.docs.map((docSnap) => [docSnap.id, docSnap.data()]));
+        const incomingIds = new Set();
+        const batch = db.batch();
+        let changedCount = 0;
+        for (const rawDoc of docs) {
+            const id = requireString(rawDoc?.id, "doc.id", 2, 200);
+            const name = requireString(rawDoc?.name, "doc.name", 1, 300);
+            const type = String(rawDoc?.type ?? "unknown").trim();
+            const sourceFile = String(rawDoc?.sourceFile ?? "").trim();
+            const content = String(rawDoc?.content ?? "");
+            const contentTypeRaw = String(rawDoc?.contentType ?? "").trim().toLowerCase();
+            const isTextDoc = isTextDocType(type, contentTypeRaw);
+            const hasDataUrlPayload = isUrlLike(content) && content.trim().toLowerCase().startsWith("data:");
+            const contentHash = hashString(content);
+            const existing = existingById.get(id) ?? null;
+            let persistedContent = content;
+            let downloadUrl = String(rawDoc?.downloadUrl ?? rawDoc?.url ?? "").trim();
+            let storagePath = String(rawDoc?.storagePath ?? "").trim();
+            let resolvedContentType = contentTypeRaw;
+            let resolvedSizeBytes = Number(rawDoc?.sizeBytes ?? 0);
+            if (!isTextDoc) {
+                if (!downloadUrl && hasDataUrlPayload) {
+                    const canReuseExisting = Boolean(existing &&
+                        String(existing.contentHash ?? "") === contentHash &&
+                        String(existing.downloadUrl ?? "").trim());
+                    if (canReuseExisting) {
+                        downloadUrl = String(existing?.downloadUrl ?? "").trim();
+                        storagePath = String(existing?.storagePath ?? "").trim();
+                        resolvedContentType = String(existing?.contentType ?? contentTypeRaw).trim().toLowerCase();
+                        resolvedSizeBytes = Number(existing?.sizeBytes ?? resolvedSizeBytes);
+                        persistedContent = "";
+                    }
+                    else {
+                        const uploaded = await uploadOpenClawDocAsset({
+                            agentId,
+                            docId: id,
+                            fileName: name,
+                            dataUrl: content,
+                            contentTypeHint: contentTypeRaw || undefined,
+                        });
+                        downloadUrl = uploaded.downloadUrl;
+                        storagePath = uploaded.storagePath;
+                        resolvedContentType = uploaded.contentType;
+                        resolvedSizeBytes = uploaded.sizeBytes;
+                        persistedContent = "";
+                    }
+                }
+                else if (!downloadUrl && isUrlLike(sourceFile)) {
+                    downloadUrl = sourceFile;
+                }
+            }
+            if (!isTextDoc && !downloadUrl) {
+                throw new Error(`syncDocs: non-text doc '${id}' requires either content as data URL or a downloadUrl/url`);
+            }
+            incomingIds.add(id);
+            const linkedTasks = Array.isArray(rawDoc?.linkedTasks)
+                ? rawDoc.linkedTasks
+                    .map((item) => {
+                    const productId = String(item?.productId ?? "").trim();
+                    const taskId = String(item?.taskId ?? "").trim();
+                    const title = String(item?.title ?? "");
+                    if (!productId || !taskId)
+                        return null;
+                    return { productId, taskId, title };
+                })
+                    .filter((item) => Boolean(item))
+                : [];
+            const linkedTaskKeys = linkedTasks.map((item) => `${item.productId}:${item.taskId}`);
+            const payload = {
+                id,
+                name,
+                type,
+                content: persistedContent,
+                downloadUrl,
+                storagePath,
+                contentType: resolvedContentType,
+                summary: String(rawDoc?.summary ?? ""),
+                tags: Array.isArray(rawDoc?.tags) ? rawDoc.tags.map((tag) => String(tag)) : [],
+                sourceFile,
+                agentId,
+                productId: rawDoc?.productId ? String(rawDoc.productId) : null,
+                sizeBytes: resolvedSizeBytes,
+                wordCount: Number(rawDoc?.wordCount ?? 0),
+                modifiedAt: String(rawDoc?.modifiedAt ?? generatedAt),
+                linkedTaskKeys,
+                linkedTasks,
+                contentHash,
+            };
+            const unchanged = Boolean(existing) &&
+                isSameJson(payload, {
+                    id: existing?.id,
+                    name: existing?.name,
+                    type: existing?.type,
+                    content: existing?.content ?? "",
+                    downloadUrl: existing?.downloadUrl ?? "",
+                    storagePath: existing?.storagePath ?? "",
+                    contentType: existing?.contentType ?? "",
+                    summary: existing?.summary ?? "",
+                    tags: existing?.tags ?? [],
+                    sourceFile: existing?.sourceFile ?? "",
+                    agentId: existing?.agentId,
+                    productId: existing?.productId ?? null,
+                    sizeBytes: Number(existing?.sizeBytes ?? 0),
+                    wordCount: Number(existing?.wordCount ?? 0),
+                    modifiedAt: String(existing?.modifiedAt ?? ""),
+                    linkedTaskKeys: existing?.linkedTaskKeys ?? [],
+                    linkedTasks: existing?.linkedTasks ?? [],
+                    contentHash: existing?.contentHash ?? "",
+                });
+            if (unchanged) {
+                continue;
+            }
+            changedCount += 1;
+            batch.set(docsCol.doc(id), {
+                ...payload,
+                syncedAt: generatedAt,
+                updatedAt: nowTs(),
+            }, { merge: true });
+        }
+        if (SYNC_DELETE_MISSING) {
+            for (const docSnap of existingSnap.docs) {
+                if (!incomingIds.has(docSnap.id)) {
+                    changedCount += 1;
+                    batch.delete(docSnap.ref);
+                }
+            }
+        }
+        batch.set(db.doc("system/openclaw_docs_sync"), {
+            agentId,
+            generatedAt,
+            count: docs.length,
+            changedCount,
+            lastSyncedAt: nowTs(),
+        }, { merge: true });
+        await batch.commit();
+        await finishAgentRun(run, { status: "success", outputSummary: `docs:${docs.length};changed:${changedCount}` });
+        res.json({ ok: true, data: { count: docs.length, changedCount, limited: docsRaw.length > docs.length } });
+    }
+    catch (error) {
+        if (run) {
+            await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        }
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/syncTeam", async (req, res) => {
+    let run = null;
+    try {
+        const sourceId = requireString(req.body?.sourceId ?? req.body?.agentId, "sourceId", 2, 120);
+        assertSyncRateLimit(`syncTeam:${sourceId}`);
+        const generatedAt = String(req.body?.generatedAt ?? new Date().toISOString());
+        const agentsRaw = Array.isArray(req.body?.agents) ? req.body.agents : [];
+        const agents = agentsRaw.slice(0, OPENCLOW_MAX_SYNC_ITEMS);
+        run = await startAgentRun({
+            productId: "global",
+            agentId: sourceId,
+            action: "summary.write",
+            inputSummary: `syncTeam:${agents.length}`,
+        });
+        const col = db.collection("openclaw_agents");
+        const existingSnap = await col.where("syncSource", "==", sourceId).get();
+        const existingById = new Map(existingSnap.docs.map((docSnap) => [docSnap.id, docSnap.data()]));
+        const incomingIds = new Set();
+        const batch = db.batch();
+        let changedCount = 0;
+        for (const raw of agents) {
+            const id = requireString(raw?.id, "agent.id", 2, 120);
+            const name = requireString(raw?.name, "agent.name", 2, 200);
+            const role = requireString(raw?.role, "agent.role", 2, 200);
+            const description = String(raw?.description ?? "");
+            incomingIds.add(id);
+            const payload = {
+                id,
+                name,
+                role,
+                description,
+                parentId: raw?.parentId ? String(raw.parentId) : null,
+                machine: String(raw?.machine ?? ""),
+                status: String(raw?.status ?? "active"),
+                tags: Array.isArray(raw?.tags) ? raw.tags.map((tag) => String(tag)) : [],
+                avatar: String(raw?.avatar ?? ""),
+                order: Number(raw?.order ?? 0),
+                syncSource: sourceId,
+            };
+            const existing = existingById.get(id) ?? null;
+            const unchanged = Boolean(existing) &&
+                isSameJson(payload, {
+                    id: existing?.id,
+                    name: existing?.name,
+                    role: existing?.role,
+                    description: existing?.description ?? "",
+                    parentId: existing?.parentId ?? null,
+                    machine: existing?.machine ?? "",
+                    status: existing?.status ?? "active",
+                    tags: existing?.tags ?? [],
+                    avatar: existing?.avatar ?? "",
+                    order: Number(existing?.order ?? 0),
+                    syncSource: existing?.syncSource,
+                });
+            if (unchanged) {
+                continue;
+            }
+            changedCount += 1;
+            batch.set(col.doc(id), {
+                ...payload,
+                syncedAt: generatedAt,
+                updatedAt: nowTs(),
+            }, { merge: true });
+        }
+        if (SYNC_DELETE_MISSING) {
+            for (const docSnap of existingSnap.docs) {
+                if (!incomingIds.has(docSnap.id)) {
+                    changedCount += 1;
+                    batch.delete(docSnap.ref);
+                }
+            }
+        }
+        batch.set(db.doc("system/openclaw_team_sync"), {
+            sourceId,
+            generatedAt,
+            count: agents.length,
+            changedCount,
+            lastSyncedAt: nowTs(),
+        }, { merge: true });
+        await batch.commit();
+        await finishAgentRun(run, { status: "success", outputSummary: `team:${agents.length};changed:${changedCount}` });
+        res.json({ ok: true, data: { count: agents.length, changedCount, limited: agentsRaw.length > agents.length } });
+    }
+    catch (error) {
+        if (run) {
+            await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        }
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+openclaw.post("/api/openclaw/addActivityNote", async (req, res) => {
+    let run = null;
+    try {
+        const productId = requireString(req.body?.productId, "productId", 2, 120);
+        const agentId = requireString(req.body?.agentId, "agentId", 2, 120);
+        const message = requireString(req.body?.message, "message", 2, 500);
+        run = await startAgentRun({ productId, agentId, action: "summary.write" });
+        await writeActivity({
+            productId,
+            type: "agent.note",
+            actorType: "agent",
+            actorId: agentId,
+            targetType: "product",
+            targetId: productId,
+            message,
+        });
+        await finishAgentRun(run, { status: "success", outputSummary: "note added" });
+        res.json({ ok: true, data: { ok: true } });
+    }
+    catch (error) {
+        if (run) {
+            await finishAgentRun(run, { status: "failed", errorMessage: error.message });
+        }
+        res.status(400).json({ ok: false, error: error.message });
+    }
+});
+exports.api = eu.https.onRequest(openclaw);
